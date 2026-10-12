@@ -189,7 +189,7 @@ _user32.GetParent.argtypes = [wintypes.HWND]
 
 
 class Pill:
-    """Small always-on-top, no-focus, click-through overlay at top-right:
+    """Small always-on-top, no-focus, click-through overlay at top-center (top-right would cover window buttons):
     '● Gather 4'. Lives on the Tk main thread."""
 
     BG, FLASH = "#1e1e1e", "#4a4a4a"
@@ -222,7 +222,7 @@ class Pill:
         r = wintypes.RECT()
         _user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0)  # SPI_GETWORKAREA (primary)
         self.win.update_idletasks()
-        self.win.geometry(f"+{r.right - self.win.winfo_reqwidth() - 16}+{r.top + 16}")
+        self.win.geometry(f"+{(r.left + r.right - self.win.winfo_reqwidth()) // 2}+{r.top + 6}")
 
     def show(self, count: int) -> None:
         self._set(count)
