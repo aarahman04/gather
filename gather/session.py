@@ -38,7 +38,7 @@ class Session:
 _SECRET = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"
     # any sk- token, except lowercase word-slugs like sk-learn-feature-selection-guide
-    r"|\bsk-(?![a-z]+(?:-[a-z]+)+(?![A-Za-z0-9_-]))[A-Za-z0-9_-]{20,}"
+    r"|\bsk-(?![a-z]{1,15}(?:-[a-z]{1,15})+(?![A-Za-z0-9_-]))[A-Za-z0-9_-]{20,}"
     r"|\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})"
     r"|\bAKIA[0-9A-Z]{16}\b"
     r"|\bxox[abposr]-[A-Za-z0-9-]{10,}"

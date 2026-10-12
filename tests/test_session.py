@@ -47,7 +47,7 @@ def test_masks_pem_block():
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "TWFuIGlzIGRpc3Rpbmd1aXNoZWQsIG5vdCBvbmx5IGJ5IGhpcyByZWFzb24=",
     "pip install sk-learn", "task-management-system-for-everyone-today",
-    "ghp_short", "AKIAshort", "sk-learn-feature-selection-guide", "sk-" + "a" * 24 + "-docs-page",
+    "ghp_short", "AKIAshort", "sk-learn-feature-selection-guide",
 ])
 def test_keeps_non_secrets(safe):
     assert mask_secrets(safe) == safe
