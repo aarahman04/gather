@@ -217,6 +217,7 @@ class Pill:
 
     def _set(self, count: int) -> None:
         self.lbl.config(text=f"Gather  {count}")
+        self.dot.config(fg="#ff3b30")  # back to recording red after saving()
 
     def _place(self) -> None:
         r = wintypes.RECT()
@@ -248,8 +249,12 @@ class Pill:
         self._paint(self.BG)
 
     def saving(self) -> None:
-        """Show 'Saving…' while an export runs (contract; implemented in fix round 1)."""
-        raise NotImplementedError
+        """Show 'Saving…' (grey dot, distinct from recording) while an export runs."""
+        self.lbl.config(text="Saving…")
+        self.dot.config(fg="#9a9a9a")
+        self._place()
+        self.win.deiconify()
+        self.win.attributes("-topmost", True)
 
     def hide(self) -> None:
         self.win.withdraw()

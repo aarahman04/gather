@@ -31,8 +31,10 @@ def restore_clipboard():
 
 
 def external_copy(text: str) -> None:
-    subprocess.run(["powershell", "-NoProfile", "-Command",
-                    f"Set-Clipboard -Value '{text}'"], check=True, timeout=30)
+    # separate process (so the owner isn't us) using Gather's ~1 s lock retry;
+    # PowerShell's Set-Clipboard fails outright if the clipboard is briefly locked
+    subprocess.run([sys.executable, "-c", "import sys; from gather import win32; "
+                    "win32.copy_text_to_clipboard(sys.argv[1])", text], check=True, timeout=30)
 
 
 def wait_for(pred, timeout):
