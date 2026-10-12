@@ -46,8 +46,8 @@ MASK_TABLE = [
 ]
 
 
-@pytest.mark.parametrize("fmt", ["md", "docx", pytest.param("pdf", marks=pytest.mark.xfail(
-    strict=True, raises=subprocess.TimeoutExpired, reason="F10: unbroken 5MB PDF exceeded 120s"))])
+# Was xfail (F10) in Codex's review; fixed by wrapping pure-ASCII PDF lines by char count (pdf.text).
+@pytest.mark.parametrize("fmt", ["md", "docx", "pdf"])
 def test_5mb_writes_every_format(tmp_path, fmt):
     # Bound the large PDF/font workload in a child process, away from the desktop app.
     subprocess.run([sys.executable, "-c", """
@@ -75,7 +75,7 @@ def test_masking_table(name, text, expected):
     assert mask_secrets(text) == (text if expected is None else expected)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="F8: long sk-learn slug is masked")
+# Was xfail (F8) in Codex's review; fixed by tightening the sk- rule to real key shapes.
 def test_public_sk_learn_slug_is_not_masked():
     slug = "sk-learn-feature-selection-guide"
     assert mask_secrets(slug) == slug
@@ -117,8 +117,8 @@ def test_sequential_filename_collisions_preserve_files(tmp_path, fmt):
         assert all(p.read_bytes().startswith(b"%PDF") for p in paths)
 
 
+# Was xfail (F2) in Codex's review; fixed by masking app and title in writers._label.
 @pytest.mark.parametrize("fmt", writers.FORMATS)
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="F2: title bypasses masking")
 def test_masking_also_covers_window_titles(tmp_path, fmt, monkeypatch):
     session = Session(T)
     session.add("ordinary text", "codex.exe", f"key={SECRET}", T)
@@ -143,15 +143,10 @@ def test_masking_also_covers_window_titles(tmp_path, fmt, monkeypatch):
     assert SECRET not in text
 
 
+# Was xfail (F3) in Codex's review; fixed by sanitizing the assembled label (surrogates, XML-illegal).
 @pytest.mark.parametrize("fmt", writers.FORMATS)
 @pytest.mark.parametrize("title", ["surrogate", "control"])
-def test_illegal_title_does_not_break_export(tmp_path, fmt, title, request):
-    if title == "surrogate" and fmt in ("md", "docx"):
-        request.node.add_marker(pytest.mark.xfail(strict=True, raises=UnicodeEncodeError,
-                                                reason="F3: title bypasses surrogate cleanup"))
-    if title == "control" and fmt == "docx":
-        request.node.add_marker(pytest.mark.xfail(strict=True, raises=ValueError,
-                                                reason="F3: title bypasses XML cleanup"))
+def test_illegal_title_does_not_break_export(tmp_path, fmt, title):
     session = Session(T)
     session.add("ordinary text", "codex.exe", "title " + ("\ud800" if title == "surrogate" else "\x01"), T)
     path = writers.write(session, fmt, tmp_path, ended=T)

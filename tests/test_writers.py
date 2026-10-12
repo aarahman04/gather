@@ -65,3 +65,28 @@ def test_stress(tmp_path, fmt):
               "word " * 40000, "ctrl \x00\x01\x08\x0b\x1b\x7f end", "→ ─│┌┐ ✓", "\ud800 lone"]:
         s.add(t, "a.exe", "t")
     assert write(s, fmt, tmp_path).stat().st_size > 0
+
+
+KEY = "sk-" + "a" * 24
+
+
+def test_label_masks_title_and_app_unless_off():
+    s = Session(T0)
+    s.add("x", f"{KEY}.exe", f"key={KEY}", T0)
+    md = render_markdown(s)
+    assert KEY not in md and "[masked]" in md.split("\n\n")[1]
+    assert f"{KEY} — key={KEY}" in render_markdown(s, mask=False)
+
+
+def test_pdf_ascii_and_cjk_across_page_break(tmp_path, monkeypatch):
+    from fpdf import FPDF
+    drawn, pages = [], []
+    orig_text, orig_out = FPDF.text, FPDF.output
+    monkeypatch.setattr(FPDF, "text", lambda self, x, y, t: (drawn.append(t), orig_text(self, x, y, t))[1])
+    monkeypatch.setattr(FPDF, "output", lambda self, *a, **k: (pages.append(self.page), orig_out(self, *a, **k))[1])
+    s = Session(T0)
+    s.add("\n".join(f"line {i} ascii" if i % 3 else f"行 {i} 日本語" for i in range(300)) + "\n" + "z" * 500,
+          "a.exe", "t")
+    assert write(s, "pdf", tmp_path).read_bytes().startswith(b"%PDF")
+    assert pages[0] > 1 and "line 1 ascii" in drawn
+    assert not any(x for x in drawn if not x.isascii()) and sum(x == "z" * len(x) for x in drawn) >= 2

@@ -37,7 +37,7 @@ class Session:
 
 _SECRET = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"
-    r"|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}"
+    r"|\bsk-(?:(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{20,}(?![\w-]))"
     r"|\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})"
     r"|\bAKIA[0-9A-Z]{16}\b"
     r"|\bxox[abposr]-[A-Za-z0-9-]{10,}"

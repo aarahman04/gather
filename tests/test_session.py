@@ -27,6 +27,7 @@ def test_add_preserves_whitespace_and_ts():
 
 @pytest.mark.parametrize("secret", [
     "sk-" + "a" * 24, "sk-ant-api03-" + "Ab1_-" * 5, "sk-proj-" + "x" * 30,
+    "sk-svcacct-" + "A_1-" * 8, "sk-" + "Ab1" * 16,
     "ghp_" + "A1" * 18, "gho_" + "b" * 36, "github_pat_" + "Z9_" * 10,
     "AKIA" + "ABCDEFGH12345678", "xoxb-1234567890-abcdef", "AIza" + "a" * 35,
 ])
@@ -45,7 +46,7 @@ def test_masks_pem_block():
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "TWFuIGlzIGRpc3Rpbmd1aXNoZWQsIG5vdCBvbmx5IGJ5IGhpcyByZWFzb24=",
     "pip install sk-learn", "task-management-system-for-everyone-today",
-    "ghp_short", "AKIAshort",
+    "ghp_short", "AKIAshort", "sk-learn-feature-selection-guide", "sk-" + "a" * 24 + "-docs-page",
 ])
 def test_keeps_non_secrets(safe):
     assert mask_secrets(safe) == safe
