@@ -2,6 +2,7 @@
 import ctypes
 import json
 import os
+import threading
 import tkinter as tk
 import winreg
 import winsound
@@ -13,15 +14,19 @@ from typing import Callable
 import pystray
 from PIL import Image, ImageDraw
 
+from .win32 import DEFAULT_HOTKEY, HOTKEYS
+
 _FORMATS = ("md", "docx", "pdf")
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _RUN_NAME = "Gather"
+_CONFIG_LOCK = threading.Lock()  # Tk hotkey changes and tray settings share the temp file
 
 
 @dataclass
 class Config:
     format: str = "md"      # 'md' | 'docx' | 'pdf'
     mask: bool = True
+    hotkey: str = DEFAULT_HOTKEY  # a win32.HOTKEYS name
 
     @staticmethod
     def path() -> Path:
@@ -38,16 +43,20 @@ class Config:
                 cfg.format = d["format"]
             if isinstance(d.get("mask"), bool):
                 cfg.mask = d["mask"]
+            if d.get("hotkey") in HOTKEYS:
+                cfg.hotkey = d["hotkey"]
         except Exception:
             pass
         return cfg
 
     def save(self) -> None:
-        p = self.path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"format": self.format, "mask": self.mask}), encoding="utf-8")
-        os.replace(tmp, p)
+        with _CONFIG_LOCK:
+            p = self.path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({"format": self.format, "mask": self.mask,
+                                       "hotkey": self.hotkey}), encoding="utf-8")
+            os.replace(tmp, p)
 
 
 def get_autostart(name: str = _RUN_NAME) -> bool:
@@ -108,10 +117,12 @@ class Tray:
 
     def __init__(self, cfg: Config, actions: dict[str, Callable[[], None]]) -> None:
         """actions keys: 'toggle', 'undo', 'cancel', 'copy_text', 'copy_path',
-        'open_folder', 'quit', 'autostart'. Left-click = 'toggle'.
+        'open_folder', 'quit', 'autostart', and 'hotkey' (takes the preset name;
+        the app saves cfg.hotkey once it registers). Left-click = 'toggle'.
         Format radio + mask checkbox edit cfg and cfg.save() directly."""
         self.cfg, self.actions = cfg, actions
         self.recording, self.count = False, 0
+        self.hotkey_ok = True  # False while no hotkey is registered
         self._img = {False: _icon_image(False), True: _icon_image(True)}
         self.menu = self._build_menu()
         self.icon = pystray.Icon("Gather", self._img[False], self._title(), self.menu)
@@ -119,7 +130,12 @@ class Tray:
     def _title(self) -> str:
         if self.recording:
             return f"Gather — recording · {self.count} item{'' if self.count == 1 else 's'}"
-        return "Gather — idle (Ctrl+Alt+G to start)"
+        if not self.hotkey_ok:
+            return "Gather — idle (click to start)"
+        return f"Gather — idle ({self.cfg.hotkey} to start)"
+
+    def _hotkey(self) -> str:
+        return self.cfg.hotkey if self.hotkey_ok else "no hotkey"
 
     def _act(self, key: str):
         return lambda icon=None, item=None: self.actions[key]()
@@ -133,12 +149,15 @@ class Tray:
                 self.cfg.save()
             return setf
 
+        def hk(name):
+            return lambda icon, item: self.actions["hotkey"](name)
+
         def togglemask(icon, item):
             self.cfg.mask = not self.cfg.mask
             self.cfg.save()
 
         return M(
-            I(lambda i: ("Stop" if self.recording else "Start") + " recording (Ctrl+Alt+G)",
+            I(lambda i: ("Stop" if self.recording else "Start") + f" recording ({self._hotkey()})",
               self._act("toggle"), default=True),
             I("Remove last item", self._act("undo"), enabled=lambda i: self.recording and self.count > 0),
             I("Cancel session", self._act("cancel"), enabled=lambda i: self.recording),
@@ -150,6 +169,10 @@ class Tray:
             I("Format", M(*[
                 I(label, fmt(f), checked=lambda i, f=f: self.cfg.format == f, radio=True)
                 for f, label in (("md", "Markdown (.md)"), ("docx", "Word (.docx)"), ("pdf", "PDF (.pdf)"))
+            ])),
+            I("Hotkey", M(*[
+                I(name, hk(name), checked=lambda i, n=name: self.cfg.hotkey == n, radio=True)
+                for name in HOTKEYS
             ])),
             I("Mask secrets", togglemask, checked=lambda i: self.cfg.mask),
             I("Start with Windows", self._act("autostart"), checked=lambda i: get_autostart()),

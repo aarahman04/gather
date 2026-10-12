@@ -19,7 +19,9 @@ def fake_app(tmp_path, monkeypatch, recording=True):
     """App without Tk/tray/watcher; output and journal folders under tmp_path."""
     app = App.__new__(App)
     app.q = queue.Queue()
-    app.cfg = SimpleNamespace(format="md", mask=True)
+    app.cfg = SimpleNamespace(format="md", mask=True, hotkey="Alt+C",
+                              save=lambda: setattr(app, "saved", app.cfg.hotkey))
+    app.saved = None
     app.folder = tmp_path / "out"
     app.journal_dir = tmp_path / "unsaved"
     app.journal_warned = False
@@ -30,8 +32,9 @@ def fake_app(tmp_path, monkeypatch, recording=True):
     app.capturing = app.destroyed = app.watcher_stopped = False
     app.pill_state = "hidden"
     app.watcher = SimpleNamespace(set_capturing=lambda on: setattr(app, "capturing", on),
-                                  stop=lambda: setattr(app, "watcher_stopped", True))
-    app.tray = SimpleNamespace(set_recording=lambda *args: None, stop=lambda: None,
+                                  stop=lambda: setattr(app, "watcher_stopped", True),
+                                  hotkey="Alt+C")
+    app.tray = SimpleNamespace(set_recording=lambda *args: None, stop=lambda: None, hotkey_ok=True,
                                notify=lambda *args: app.notifications.append(args[1]))
     app.pill = SimpleNamespace(hide=lambda: setattr(app, "pill_state", "hidden"),
                                show=lambda n: setattr(app, "pill_state", f"recording {n}"),
@@ -253,3 +256,61 @@ def test_pill_saving():
         p.hide()
     finally:
         root.destroy()
+
+
+def test_hotkey_change_success_saves_cfg(tmp_path, monkeypatch):
+    app = fake_app(tmp_path, monkeypatch, recording=False)
+    app.watcher.set_hotkey = lambda name: setattr(app.watcher, "hotkey", name) or True
+    app.on_hotkey_change("Alt+C")  # already active: no-op
+    assert app.saved is None and not app.notifications
+    app.on_hotkey_change("Pause")
+    assert app.cfg.hotkey == app.saved == "Pause" and app.tray.hotkey_ok
+    assert app.notifications[-1] == "Hotkey is now Pause."
+
+
+def test_hotkey_change_failure_keeps_cfg(tmp_path, monkeypatch):
+    app = fake_app(tmp_path, monkeypatch, recording=False)
+    app.watcher.set_hotkey = lambda name: False
+    app.on_hotkey_change("Scroll Lock")
+    assert app.cfg.hotkey == "Alt+C" and app.saved is None and app.tray.hotkey_ok
+    assert "Couldn't register Scroll Lock" in app.notifications[-1]
+    assert "still using Alt+C" in app.notifications[-1]
+
+
+def test_startup_hotkey_conflict_keeps_tray_toggle(tmp_path, monkeypatch):
+    app = fake_app(tmp_path, monkeypatch, recording=False)
+    app.watcher.hotkey = None
+    app.watcher.start = lambda: False
+    app.tray.run_detached = app.root.mainloop = lambda: None
+    app.run()
+    assert not app.tray.hotkey_ok
+    assert "Alt+C is used by another app" in app.notifications[-1]
+    assert "click the tray icon" in app.notifications[-1]
+    app.on_toggle()
+    assert app.session is not None and app.capturing
+
+
+def test_retry_hotkey_after_startup_conflict(tmp_path, monkeypatch):
+    app = fake_app(tmp_path, monkeypatch, recording=False)
+    app.watcher.hotkey = None
+    app.tray.hotkey_ok = False
+    app.watcher.set_hotkey = lambda name: setattr(app.watcher, "hotkey", name) or True
+    app.on_hotkey_change("Alt+C")
+    assert app.watcher.hotkey == app.cfg.hotkey == app.saved == "Alt+C"
+    assert app.tray.hotkey_ok
+
+
+def test_hotkey_save_failure_still_updates_active_tray(tmp_path, monkeypatch):
+    app = fake_app(tmp_path, monkeypatch, recording=False)
+    app.watcher.hotkey = None
+    app.tray.hotkey_ok = False
+    app.watcher.set_hotkey = lambda name: setattr(app.watcher, "hotkey", name) or True
+
+    def denied():
+        raise PermissionError("config locked")
+
+    app.cfg.save = denied
+    app.q.put(("hotkey_change", "Pause"))
+    app.drain()
+    assert app.watcher.hotkey == app.cfg.hotkey == "Pause" and app.tray.hotkey_ok
+    assert "config locked" in app.notifications[-1]

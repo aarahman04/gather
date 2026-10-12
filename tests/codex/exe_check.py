@@ -81,19 +81,23 @@ def wait_for(callback, timeout=15):
     raise AssertionError("Timed out waiting for EXE state")
 
 
+COMBO = (0x12, ord("C"))  # Alt+C; fresh APPDATA means default config
+assert win32.DEFAULT_HOTKEY == "Alt+C"
+
+
 def hotkey():
     hwnd = foreground()
-    assert not any(win32.user32.GetAsyncKeyState(vk) & 0x8000 for vk in (0x11, 0x12, ord("G"))), "Keys already held"
-    keys = [(0x11, 0), (0x12, 0), (ord("G"), 0), (ord("G"), 2), (0x12, 2), (0x11, 2)]
+    assert not any(win32.user32.GetAsyncKeyState(vk) & 0x8000 for vk in COMBO), "Keys already held"
+    keys = [(vk, 0) for vk in COMBO] + [(vk, 2) for vk in reversed(COMBO)]
     inputs = (INPUT * len(keys))(*(INPUT(type=1, ki=KEYBDINPUT(wVk=vk, dwFlags=flags))
                                   for vk, flags in keys))
     assert win32.user32.GetForegroundWindow() == hwnd, "Focus changed before SendInput"
     sent = win32.user32.SendInput(len(inputs), inputs, ctypes.sizeof(INPUT))
     if sent != len(inputs):
         # Release just our modifiers even if Windows accepted only part of the batch.
-        releases = (INPUT * 3)(*(INPUT(type=1, ki=KEYBDINPUT(wVk=vk, dwFlags=2))
-                                 for vk in (ord("G"), 0x12, 0x11)))
-        win32.user32.SendInput(3, releases, ctypes.sizeof(INPUT))
+        releases = (INPUT * len(COMBO))(*(INPUT(type=1, ki=KEYBDINPUT(wVk=vk, dwFlags=2))
+                                          for vk in reversed(COMBO)))
+        win32.user32.SendInput(len(COMBO), releases, ctypes.sizeof(INPUT))
         raise ctypes.WinError(ctypes.get_last_error())
 
 
@@ -143,7 +147,8 @@ def main():
             assert process_image(win32._window_pid(hwnd)) == exe
             owned_pids.add(win32._window_pid(hwnd))
             time.sleep(0.3)
-            taken = not win32.user32.RegisterHotKey(None, 9281, win32.MOD_CONTROL | win32.MOD_ALT, ord("G"))
+            mods, vk = win32.HOTKEYS[win32.DEFAULT_HOTKEY]
+            taken = not win32.user32.RegisterHotKey(None, 9281, mods, vk)
             if not taken:
                 win32.user32.UnregisterHotKey(None, 9281)
             assert taken, "EXE has not registered its hotkey"

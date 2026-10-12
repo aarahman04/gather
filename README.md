@@ -2,8 +2,8 @@
 
 Copy as many things as you like, from any app, then paste them all as **one file**.
 
-Press **Ctrl+Alt+G**, copy from your browser, terminal, editor, chat, anything.
-Press **Ctrl+Alt+G** again. Gather writes everything into one Markdown file and puts
+Press **Alt+C**, copy from your browser, terminal, editor, chat, anything.
+Press **Alt+C** again. Gather writes everything into one Markdown file and puts
 that *file* on your clipboard, so **Ctrl+V** in a folder, an editor or a chat's upload
 box pastes the file itself.
 
@@ -28,7 +28,7 @@ taskbar if you want it always visible. You don't need it, though: a small red
 
 | | |
 |---|---|
-| Start / stop recording | **Ctrl+Alt+G**, or left-click the tray icon |
+| Start / stop recording | **Alt+C**, or left-click the tray icon |
 | While recording | every text copy is collected; the pill counts items |
 | After stopping | the file is on your clipboard. Press **Ctrl+V** wherever you want it |
 | While saving | the pill shows a grey **Saving…** (large PDFs take a few seconds); you can start a new session meanwhile |
@@ -68,6 +68,7 @@ Windows 11:
 - *Copy last file path*
 - *Open Gather folder*: every session is saved in `Documents\Gather`, which doubles as your history
 - *Format*: Markdown (default), Word, or PDF
+- *Hotkey*: Alt+C (default), Win+Y, Pause, Scroll Lock, or Ctrl+Alt+G. Changes apply immediately and are saved in your config. If a key is taken by another app, Gather says so and keeps the previous working key; left-clicking the tray still works
 - *Mask secrets* (on by default): replaces things that are almost certainly API keys
   (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `AIza…`, private-key blocks) with `[masked]`,
   in the copied text and in window titles
@@ -105,7 +106,7 @@ Gather keeps recording the same session: fix the cause or switch format, then st
 git clone https://github.com/aarahman04/gather.git; cd gather
 python -m venv .venv; .\.venv\Scripts\pip install -r requirements-dev.txt
 .\.venv\Scripts\pythonw -m gather          # run
-.\.venv\Scripts\python -m pytest -q        # tests (they press Ctrl+Alt+G and use the clipboard)
+.\.venv\Scripts\python -m pytest -q        # tests (they press Alt+C and Pause and use the clipboard)
 .\build.ps1                                 # -> dist\Gather.exe
 ```
 

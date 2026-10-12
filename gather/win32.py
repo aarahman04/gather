@@ -10,8 +10,6 @@ from ctypes import wintypes as w
 from pathlib import Path
 from typing import Callable
 
-# Ctrl+Alt+G
-HOTKEY_LABEL = "Ctrl+Alt+G"
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -28,12 +26,24 @@ WM_CLOSE = 0x0010
 WM_HOTKEY = 0x0312
 WM_CLIPBOARDUPDATE = 0x031D
 HWND_MESSAGE = w.HWND(-3)
-MOD_ALT, MOD_CONTROL, MOD_NOREPEAT = 0x1, 0x2, 0x4000
+WM_APP = 0x8000
+WM_SET_HOTKEY = WM_APP + 1  # private: swap the hotkey on the watcher thread
+MOD_ALT, MOD_CONTROL, MOD_WIN, MOD_NOREPEAT = 0x1, 0x2, 0x8, 0x4000
 CF_UNICODETEXT, CF_HDROP = 13, 15
 GMEM_MOVEABLE = 0x0002
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ERROR_ALREADY_EXISTS = 183
 HOTKEY_ID = 1
+
+# Tray presets, name -> (modifiers, virtual key). MOD_NOREPEAT is added on registration.
+HOTKEYS: dict[str, tuple[int, int]] = {
+    "Alt+C": (MOD_ALT, ord("C")),
+    "Win+Y": (MOD_WIN, ord("Y")),
+    "Pause": (0, 0x13),        # VK_PAUSE
+    "Scroll Lock": (0, 0x91),  # VK_SCROLL
+    "Ctrl+Alt+G": (MOD_CONTROL | MOD_ALT, ord("G")),
+}
+DEFAULT_HOTKEY = "Alt+C"
 
 
 class WNDCLASSW(ctypes.Structure):
@@ -203,14 +213,19 @@ def _wndproc(hwnd, msg, wparam, lparam):
     try:
         wt = _watchers.get(hwnd)
         if wt is not None:
-            if msg == WM_HOTKEY and wparam == HOTKEY_ID:
+            # Old queued hotkeys can survive a swap, including reuse of their ID.
+            if (msg == WM_HOTKEY and wparam == wt._hotkey_id and wt.hotkey is not None
+                    and (lparam >> 16) & 0xFFFF == HOTKEYS[wt.hotkey][1]):
                 wt._on_hotkey()
                 return 0
             if msg == WM_CLIPBOARDUPDATE:
                 wt._handle_update()
                 return 0
+            if msg == WM_SET_HOTKEY:
+                wt._swap_hotkey()
+                return 0
             if msg == WM_DESTROY:
-                user32.UnregisterHotKey(hwnd, HOTKEY_ID)
+                user32.UnregisterHotKey(hwnd, wt._hotkey_id)
                 user32.RemoveClipboardFormatListener(hwnd)
                 user32.PostQuitMessage(0)
                 return 0
@@ -240,19 +255,28 @@ def _register_class() -> None:
 class ClipboardWatcher:
     """Hidden message-only window on its own daemon thread.
 
-    Receives WM_HOTKEY (Ctrl+Alt+G) and WM_CLIPBOARDUPDATE.
+    Receives WM_HOTKEY (one of HOTKEYS) and WM_CLIPBOARDUPDATE.
     Callbacks run on the watcher thread; keep them cheap (caller enqueues).
     """
 
     def __init__(self, on_hotkey: Callable[[], None],
-                 on_text: Callable[[str, str, str], None]) -> None:
+                 on_text: Callable[[str, str, str], None],
+                 hotkey: str = DEFAULT_HOTKEY) -> None:
         """on_text(text, app, title): app = foreground process exe name
-        (e.g. 'chrome.exe'), title = foreground window title at copy time."""
+        (e.g. 'chrome.exe'), title = foreground window title at copy time.
+        hotkey: a HOTKEYS name, registered by start()."""
+        if hotkey not in HOTKEYS:
+            raise ValueError(f"unknown hotkey {hotkey!r}")
+        self._want = hotkey
+        self.hotkey: str | None = None  # name currently registered, None if none
+        self._hotkey_id = HOTKEY_ID
+        self._req = None  # (name, done Event, result list) for _swap_hotkey
+        self._lock = threading.Lock()
+        self._req_lock = threading.Lock()
         self._on_hotkey = on_hotkey
         self._on_text = on_text
         self._capturing = False
         self._hwnd = None
-        self._hotkey_ok = False
         self._ready = threading.Event()
         self._error: BaseException | None = None
         self._thread: threading.Thread | None = None
@@ -266,7 +290,48 @@ class ClipboardWatcher:
         self._ready.wait()
         if self._error:
             raise self._error
-        return self._hotkey_ok
+        return self.hotkey is not None
+
+    def set_hotkey(self, name: str) -> bool:
+        """Switch presets on the watcher thread. False keeps the working key;
+        cancel requests that haven't started within 2 s."""
+        if name not in HOTKEYS:
+            raise ValueError(f"unknown hotkey {name!r}")
+        # RegisterHotKey must run on the thread that owns the window
+        with self._lock:
+            if not self._hwnd:
+                return False
+            if name == self.hotkey:
+                return True
+            done, result = threading.Event(), []
+            with self._req_lock:
+                self._req = (name, done, result)
+                if not user32.PostMessageW(self._hwnd, WM_SET_HOTKEY, 0, 0):
+                    self._req = None
+                    return False
+            done.wait(2)
+            # If registration has started, wait for its atomic swap to finish.
+            with self._req_lock:
+                self._req = None
+                return bool(result and result[0])
+
+    def _register(self, name: str, key_id: int) -> bool:
+        mods, vk = HOTKEYS[name]
+        return bool(user32.RegisterHotKey(self._hwnd, key_id, mods | MOD_NOREPEAT, vk))
+
+    def _swap_hotkey(self) -> None:
+        with self._req_lock:
+            if self._req is None:
+                return
+            (name, done, result), self._req = self._req, None
+            # Register first: a failed choice must never release the working key.
+            new_id = HOTKEY_ID + 1 if self._hotkey_id == HOTKEY_ID else HOTKEY_ID
+            ok = self._register(name, new_id)
+            if ok:
+                user32.UnregisterHotKey(self._hwnd, self._hotkey_id)
+                self._hotkey_id, self.hotkey = new_id, name
+            result.append(ok)
+            done.set()
 
     def set_capturing(self, on: bool) -> None:
         """When False, clipboard updates are ignored (clipboard not read)."""
@@ -294,8 +359,8 @@ class ClipboardWatcher:
                 raise ctypes.WinError(ctypes.get_last_error())
             self._hwnd = hwnd
             _watchers[hwnd] = self
-            self._hotkey_ok = bool(user32.RegisterHotKey(
-                hwnd, HOTKEY_ID, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, ord("G")))
+            if self._register(self._want, self._hotkey_id):
+                self.hotkey = self._want
             if not user32.AddClipboardFormatListener(hwnd):
                 raise ctypes.WinError(ctypes.get_last_error())
             _owner_hwnd = hwnd
@@ -310,6 +375,7 @@ class ClipboardWatcher:
             user32.DispatchMessageW(ctypes.byref(msg))
         _watchers.pop(hwnd, None)
         self._hwnd = None
+        self.hotkey = None
 
     def _handle_update(self) -> None:
         if not self._capturing:

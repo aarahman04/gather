@@ -13,9 +13,26 @@ from gather import win32
 shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 shell32.DragQueryFileW.restype = w.UINT
 shell32.DragQueryFileW.argtypes = [w.HANDLE, w.UINT, w.LPWSTR, w.UINT]
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-user32.keybd_event.restype = None
-user32.keybd_event.argtypes = [w.BYTE, w.BYTE, w.DWORD, ctypes.c_size_t]
+KEYUP = 0x2
+win32._sig(win32.user32, "keybd_event", None, w.BYTE, w.BYTE, w.DWORD, ctypes.c_size_t)
+
+
+def press(*vks):
+    """Verify focus before sending only the test watcher's registered keys."""
+    hwnd = win32.user32.GetForegroundWindow()
+    app, title = win32._foreground_info()
+    assert hwnd and title, "Cannot verify foreground window"
+    print(f"Foreground verified: {app}, {ascii(title)}")
+    assert win32.user32.GetForegroundWindow() == hwnd, "Focus changed before keys"
+    try:
+        for vk in vks:
+            win32.user32.keybd_event(vk, 0, 0, 0)
+    finally:
+        for vk in reversed(vks):
+            win32.user32.keybd_event(vk, 0, KEYUP, 0)
+
+
+ALT_C, PAUSE = (0x12, ord("C")), (0x13,)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -123,14 +140,155 @@ def test_password_manager_copy_ignored(watcher):
 
 
 def test_hotkey(watcher):
-    _, ok, hits, _ = watcher
+    wt, ok, hits, _ = watcher
     if not ok:
-        pytest.skip("Ctrl+Alt+G already registered by another app")
-    VK_CONTROL, VK_MENU, KEYUP = 0x11, 0x12, 0x2
-    for vk in (VK_CONTROL, VK_MENU, ord("G")):
-        user32.keybd_event(vk, 0, 0, 0)
-    for vk in (ord("G"), VK_MENU, VK_CONTROL):
-        user32.keybd_event(vk, 0, KEYUP, 0)
+        pytest.skip("Alt+C already registered by another app")
+    assert wt.hotkey == win32.DEFAULT_HOTKEY == "Alt+C"
+    press(*ALT_C)
+    assert hits.wait(2)
+
+
+def test_set_hotkey(watcher):
+    wt, ok, hits, _ = watcher
+    if not ok:
+        pytest.skip("Alt+C already registered by another app")
+    with pytest.raises(ValueError):
+        wt.set_hotkey("F13")
+    try:
+        assert wt.set_hotkey("Pause") and wt.hotkey == "Pause"
+        press(*PAUSE)
+        assert hits.wait(2)
+        hits.clear()
+        mods, vk = win32.HOTKEYS["Alt+C"]
+        assert win32.user32.RegisterHotKey(None, 0x7ABD, mods, vk)
+        win32.user32.UnregisterHotKey(None, 0x7ABD)
+
+        # another window/thread holds Scroll Lock: switching fails, Pause still fires
+        held, release = threading.Event(), threading.Event()
+
+        def holder():
+            mods, vk = win32.HOTKEYS["Scroll Lock"]
+            held.ok = win32.user32.RegisterHotKey(None, 0x7ABC, mods | win32.MOD_NOREPEAT, vk)
+            held.set()
+            release.wait(10)
+            if held.ok:
+                win32.user32.UnregisterHotKey(None, 0x7ABC)
+
+        th = threading.Thread(target=holder)
+        th.start()
+        try:
+            assert held.wait(5)
+            if not held.ok:
+                pytest.skip("Scroll Lock already registered by another app")
+            assert wt.set_hotkey("Scroll Lock") is False
+            assert wt.hotkey == "Pause"
+            hits.clear()
+            press(*PAUSE)
+            assert hits.wait(2)
+        finally:
+            release.set()
+            th.join()
+    finally:
+        assert wt.set_hotkey("Alt+C") and wt.hotkey == "Alt+C"
+    hits.clear()
+    press(*ALT_C)
+    assert hits.wait(2)
+
+
+@pytest.mark.parametrize("preset", ["Alt+C", "Win+Y", "Pause", "Scroll Lock", "Ctrl+Alt+G"])
+def test_swap_registers_new_preset_before_releasing_previous(monkeypatch, preset):
+    wt = win32.ClipboardWatcher(lambda: None, lambda *args: None)
+    wt._hwnd = 123
+    wt.hotkey = "Pause" if preset == "Alt+C" else "Alt+C"
+    calls = []
+    monkeypatch.setattr(win32.user32, "RegisterHotKey",
+                        lambda hwnd, key_id, mods, vk: calls.append(("register", key_id, mods, vk)) or True)
+    monkeypatch.setattr(win32.user32, "UnregisterHotKey",
+                        lambda hwnd, key_id: calls.append(("unregister", key_id)) or True)
+    done, result = threading.Event(), []
+    wt._req = (preset, done, result)
+    wt._swap_hotkey()
+    mods, vk = win32.HOTKEYS[preset]
+    assert calls == [("register", win32.HOTKEY_ID + 1, mods | win32.MOD_NOREPEAT, vk),
+                     ("unregister", win32.HOTKEY_ID)]
+    assert wt.hotkey == preset and wt._hotkey_id == win32.HOTKEY_ID + 1
+    assert done.is_set() and result == [True]
+
+
+def test_failed_swap_never_releases_previous(monkeypatch):
+    wt = win32.ClipboardWatcher(lambda: None, lambda *args: None)
+    wt._hwnd, wt.hotkey = 123, "Alt+C"
+    released = []
+    monkeypatch.setattr(win32.user32, "RegisterHotKey", lambda *args: False)
+    monkeypatch.setattr(win32.user32, "UnregisterHotKey", lambda *args: released.append(args))
+    done, result = threading.Event(), []
+    wt._req = ("Pause", done, result)
+    wt._swap_hotkey()
+    assert wt.hotkey == "Alt+C" and wt._hotkey_id == win32.HOTKEY_ID
+    assert released == [] and done.is_set() and result == [False]
+
+
+def test_retired_hotkey_message_does_not_toggle(monkeypatch):
+    hits = []
+    wt = win32.ClipboardWatcher(lambda: hits.append(True), lambda *args: None)
+    wt._hwnd, wt.hotkey, wt._hotkey_id = 123, "Pause", win32.HOTKEY_ID + 1
+    monkeypatch.setitem(win32._watchers, wt._hwnd, wt)
+    monkeypatch.setattr(win32.user32, "DefWindowProcW", lambda *args: 0)
+    win32._wndproc(wt._hwnd, win32.WM_HOTKEY, win32.HOTKEY_ID, 0)
+    assert hits == []
+    win32._wndproc(wt._hwnd, win32.WM_HOTKEY, wt._hotkey_id, ord("C") << 16 | win32.MOD_ALT)
+    assert hits == []  # old binding with a reused ID
+    win32._wndproc(wt._hwnd, win32.WM_HOTKEY, wt._hotkey_id, 0x13 << 16)
+    assert hits == [True]
+
+
+def test_failed_post_clears_hotkey_request(monkeypatch):
+    wt = win32.ClipboardWatcher(lambda: None, lambda *args: None)
+    wt._hwnd, wt.hotkey = 123, "Alt+C"
+    monkeypatch.setattr(win32.user32, "PostMessageW", lambda *args: False)
+    assert wt.set_hotkey("Pause") is False
+    assert wt._req is None and wt.hotkey == "Alt+C"
+
+
+def test_startup_registration_failure(monkeypatch):
+    wt = win32.ClipboardWatcher(lambda: None, lambda *args: None)
+    monkeypatch.setattr(wt, "_register", lambda *args: False)
+    try:
+        assert wt.start() is False
+        assert wt.hotkey is None and wt._hwnd
+    finally:
+        wt.stop()
+    assert wt._hwnd is None
+
+
+def test_timed_out_hotkey_request_does_not_apply_later(watcher, monkeypatch):
+    wt, ok, hits, _ = watcher
+    if not ok:
+        pytest.skip("Alt+C already registered by another app")
+    entered, release, processed = threading.Event(), threading.Event(), threading.Event()
+    original_info, original_swap = win32._foreground_info, wt._swap_hotkey
+
+    def stalled_info():
+        entered.set()
+        assert release.wait(5)
+        return original_info()
+
+    def observed_swap():
+        original_swap()
+        processed.set()
+
+    monkeypatch.setattr(win32, "_foreground_info", stalled_info)
+    monkeypatch.setattr(wt, "_swap_hotkey", observed_swap)
+    wt.set_capturing(True)
+    external_copy("codex-hotkey-timeout")
+    assert entered.wait(2)
+    try:
+        assert wt.set_hotkey("Pause") is False
+    finally:
+        release.set()
+    assert processed.wait(2)
+    assert wt.hotkey == "Alt+C"
+    press(*ALT_C)
     assert hits.wait(2)
 
 

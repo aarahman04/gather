@@ -1,4 +1,7 @@
+import threading
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -12,8 +15,10 @@ def test_config_roundtrip_and_corrupt(tmp_path, monkeypatch):
     assert ui.Config.load() == ui.Config("pdf", False)
     ui.Config.path().write_text("{nope")
     assert ui.Config.load() == ui.Config()
-    ui.Config.path().write_text('{"format": "exe", "mask": "x"}')
+    ui.Config.path().write_text('{"format": "exe", "mask": "x", "hotkey": "F13"}')
     assert ui.Config.load() == ui.Config()
+    ui.Config(hotkey="Pause").save()
+    assert ui.Config.load().hotkey == "Pause"
 
 
 def test_autostart():
@@ -41,14 +46,17 @@ def test_tray_menu(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     calls = []
     keys = "toggle undo cancel copy_text copy_path open_folder quit autostart".split()
-    t = ui.Tray(ui.Config(), {k: (lambda k=k: calls.append(k)) for k in keys})
+    actions = {k: (lambda k=k: calls.append(k)) for k in keys}
+    actions["hotkey"] = lambda name: calls.append(("hotkey", name))
+    t = ui.Tray(ui.Config(), actions)
     items = list(t.menu.items)
-    assert items[0].text == "Start recording (Ctrl+Alt+G)"
+    assert items[0].text == "Start recording (Alt+C)"
+    assert t._title() == "Gather — idle (Alt+C to start)"
     assert items[0].default
     undo, cancel = items[1], items[2]
     assert not undo.enabled and not cancel.enabled
     t.recording, t.count = True, 2
-    assert items[0].text == "Stop recording (Ctrl+Alt+G)"
+    assert items[0].text == "Stop recording (Alt+C)"
     assert undo.enabled and cancel.enabled
     items[0](t.icon)
     assert calls == ["toggle"]
@@ -57,6 +65,74 @@ def test_tray_menu(tmp_path, monkeypatch):
     pdf(t.icon)
     assert t.cfg.format == "pdf" and ui.Config.load().format == "pdf"
     assert pdf.checked
+
+    names = [i.text for i in items]
+    assert names.index("Hotkey") == names.index("Format") + 1
+    hk = list(items[names.index("Hotkey")].submenu.items)
+    assert [i.text for i in hk] == ["Alt+C", "Win+Y", "Pause", "Scroll Lock", "Ctrl+Alt+G"]
+    assert [i.checked for i in hk] == [True, False, False, False, False]
+    calls.clear()
+    hk[2](t.icon)
+    assert calls == [("hotkey", "Pause")]
+    assert t.cfg.hotkey == "Alt+C"  # the app changes cfg only once it registers
+    t.cfg.hotkey = "Pause"
+    t.recording = False
+    assert [i.checked for i in hk] == [False, False, True, False, False]
+    assert items[0].text == "Start recording (Pause)"
+    t.hotkey_ok = False
+    assert items[0].text == "Start recording (no hotkey)"
+    assert t._title() == "Gather — idle (click to start)"
+    calls.clear()
+    items[0](t.icon)
+    assert calls == ["toggle"]
+
+
+@pytest.mark.parametrize("preset", ["Alt+C", "Win+Y", "Pause", "Scroll Lock", "Ctrl+Alt+G"])
+def test_hotkey_config_persistence(tmp_path, monkeypatch, preset):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    ui.Config("docx", False, preset).save()
+    assert ui.Config.load() == ui.Config("docx", False, preset)
+
+
+def test_old_config_defaults_to_alt_c(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    path = ui.Config.path()
+    path.parent.mkdir(parents=True)
+    path.write_text('{"format":"pdf","mask":false}')
+    assert ui.Config.load() == ui.Config("pdf", False, "Alt+C")
+
+
+def test_concurrent_config_saves_keep_valid_preferences(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    entered, release, second_started, second_write = (threading.Event() for _ in range(4))
+    original = Path.write_text
+
+    def blocked_write(path, data, *args, **kwargs):
+        if not entered.is_set():
+            result = original(path, data, *args, **kwargs)
+            entered.set()
+            assert release.wait(3)
+            return result
+        second_write.set()
+        return original(path, data, *args, **kwargs)
+
+    def save_second():
+        second_started.set()
+        ui.Config("pdf", False, "Pause").save()
+
+    monkeypatch.setattr(Path, "write_text", blocked_write)
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(ui.Config(hotkey="Alt+C").save)
+        try:
+            assert entered.wait(2)
+            second = pool.submit(save_second)
+            assert second_started.wait(2)
+            assert not second_write.wait(0.1)
+        finally:
+            release.set()
+        first.result(2)
+        second.result(2)
+    assert ui.Config.load() == ui.Config("pdf", False, "Pause")
 
 
 def test_pill():

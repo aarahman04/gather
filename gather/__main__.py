@@ -39,17 +39,21 @@ class App:
         actions = {name: (lambda n=name: self.q.put((n,))) for name in
                    ("toggle", "undo", "cancel", "copy_text", "copy_path",
                     "open_folder", "quit", "autostart")}
+        actions["hotkey"] = lambda name: self.q.put(("hotkey_change", name))
         self.tray = ui.Tray(self.cfg, actions)
         self.watcher = win32.ClipboardWatcher(
             on_hotkey=lambda: self.q.put(("toggle",)),
-            on_text=lambda text, app, title: self.q.put(("clip", text, app, title, datetime.now())))
+            on_text=lambda text, app, title: self.q.put(("clip", text, app, title, datetime.now())),
+            hotkey=self.cfg.hotkey)
 
     def run(self) -> None:
         self.tray.run_detached()
         self.tray.set_recording(False)
         if not self.watcher.start():
-            self.tray.notify("Gather", f"{win32.HOTKEY_LABEL} is taken by another app. "
-                                       "Click the tray icon to start/stop instead.")
+            self.tray.hotkey_ok = False
+            self.tray.set_recording(False)
+            self.tray.notify("Gather", f"{self.cfg.hotkey} is used by another app. Pick another in "
+                                       "the tray (Hotkey), or click the tray icon to start/stop.")
         self.recover()
         self.root.after(50, self.drain)
         self.root.mainloop()
@@ -122,6 +126,25 @@ class App:
         ui.set_autostart(not ui.get_autostart(), command)
         self.tray.set_recording(self.session is not None, len(self.session or ()))
 
+    def on_hotkey_change(self, name: str) -> None:
+        if name == self.cfg.hotkey and self.watcher.hotkey == name:
+            return
+        if self.watcher.set_hotkey(name):
+            self.cfg.hotkey = name
+            self.tray.hotkey_ok = True
+            self.tray.set_recording(self.session is not None, len(self.session or ()))
+            self.cfg.save()
+            self.tray.notify("Gather", f"Hotkey is now {name}.")
+            return
+        elif self.watcher.hotkey:
+            self.tray.notify("Gather", f"Couldn't register {name} (in use or Gather is busy) — "
+                                       f"still using {self.watcher.hotkey}.")
+        else:
+            self.tray.notify("Gather", f"Couldn't register {name} (in use or Gather is busy). Pick another, "
+                                       "or click the tray icon to start/stop.")
+        self.tray.hotkey_ok = self.watcher.hotkey is not None
+        self.tray.set_recording(self.session is not None, len(self.session or ()))
+
     def on_quit(self) -> None:
         if self.session is not None:
             if len(self.session):
@@ -162,8 +185,10 @@ class App:
                 self.watcher.set_capturing(True)
                 self.tray.set_recording(True, len(session))
                 self.pill.show(len(session))
+                retry = (f"press {self.watcher.hotkey} or click the tray icon"
+                         if self.watcher.hotkey else "click the tray icon")
                 self.tray.notify("Gather", f"Couldn't save ({why}). Your {n} are kept and Gather is "
-                                           f"still recording — press {win32.HOTKEY_LABEL} to try "
+                                           f"still recording — {retry} to try "
                                            "again, or change the format in the tray.")
             else:  # the journal stays on disk; recover() exports it next start
                 self.tray.notify("Gather", f"Couldn't save ({why}). Your {n} are kept and will be "
