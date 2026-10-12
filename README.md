@@ -45,6 +45,22 @@ when you stop.
 - **Windows Terminal:** pastes the file's full path. For the text itself, use tray →
   **Copy last as text**.
 
+**Copying from terminals.** Gather collects whatever lands on the clipboard. The pill count
+goes up on every capture, so if it doesn't move, the terminal didn't copy. Tested on
+Windows 11:
+
+- **Windows Terminal:** select with the mouse, then **Ctrl+C**, **Ctrl+Shift+C** or
+  right-click. Ctrl+C copies only while the selection is still highlighted. If the
+  highlight is gone (for example because output kept scrolling), Ctrl+C goes to the
+  running program, and in Claude Code or a shell that means *interrupt*, not copy.
+- **Claude Code:** when Claude Code handles the mouse itself, just selecting text copies
+  it (you'll see "Copied N characters"); don't press Ctrl+C afterwards. To use Windows
+  Terminal's own selection instead, hold **Shift** while dragging, then press Ctrl+Shift+C.
+- **PowerShell in the classic console window** (not Windows Terminal): Ctrl+A and
+  Ctrl+C act on the command line only. Select with the mouse and press **Enter** or
+  right-click.
+- **cmd:** select with the mouse (or Ctrl+A), then **Enter** or Ctrl+C.
+
 **Tray menu**
 
 - *Remove last item* / *Cancel session* (while recording)
