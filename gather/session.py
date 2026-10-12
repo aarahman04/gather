@@ -1,4 +1,5 @@
 """Session model."""
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -54,7 +55,7 @@ def mask_secrets(text: str) -> str:
 class Journal:
     """Append-only on-disk copy of one session, so a crash, forced exit or failed
     export never loses collected text. One JSON line per event; deleted once the
-    session's file is safely written. Contract (implemented in fix round 1):"""
+    session's file is safely written."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -63,23 +64,55 @@ class Journal:
     def create(cls, folder: Path, session: Session) -> "Journal":
         """New journal file in folder (created if missing), unique per session,
         header line holds session.started."""
-        raise NotImplementedError
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{session.started:%Y%m%d-%H%M%S-%f}.jsonl"
+        j = cls(path)
+        j._write({"started": session.started.isoformat()}, "w")
+        for c in session.chunks:  # a resumed session keeps what it already had
+            j.append(c)
+        return j
+
+    def _write(self, rec: dict, mode: str = "a") -> None:
+        # surrogatepass: clipboard text can hold lone surrogates; keep it byte-exact
+        line = json.dumps(rec, ensure_ascii=False) + "\n"
+        with open(self.path, mode, encoding="utf-8", errors="surrogatepass") as f:
+            f.write(line)  # closing flushes to the OS, which survives a process kill
 
     def append(self, chunk: Chunk) -> None:
         """Write the chunk as one line and flush (survives process kill)."""
-        raise NotImplementedError
+        self._write({"text": chunk.text, "app": chunk.app, "title": chunk.title,
+                     "ts": chunk.ts.isoformat()})
 
     def undo(self) -> None:
         """Record that the last chunk was removed."""
-        raise NotImplementedError
+        self._write({"undo": True})
 
     def delete(self) -> None:
         """Remove the file; missing file is fine."""
-        raise NotImplementedError
+        self.path.unlink(missing_ok=True)
 
     @staticmethod
     def recover(folder: Path) -> list[tuple["Journal", Session]]:
         """Every journal left in folder, replayed into a Session (undo applied).
-        A truncated/corrupt last line is skipped; an unreadable file yields an
+        A truncated/corrupt line is skipped; an unreadable file yields an
         empty Session, never an exception. Missing folder -> []."""
-        raise NotImplementedError
+        out = []
+        for path in sorted(folder.glob("*.jsonl")) if folder.is_dir() else []:
+            session = Session()
+            try:
+                for line in path.read_text(encoding="utf-8", errors="surrogatepass").splitlines():
+                    try:
+                        rec = json.loads(line)
+                        if "started" in rec:
+                            session.started = datetime.fromisoformat(rec["started"])
+                        elif rec.get("undo"):
+                            session.undo()
+                        else:
+                            session.chunks.append(Chunk(rec["text"], rec["app"], rec["title"],
+                                                        datetime.fromisoformat(rec["ts"])))
+                    except (ValueError, KeyError, TypeError):
+                        continue  # torn write from a crash
+            except OSError:
+                pass
+            out.append((Journal(path), session))
+        return out

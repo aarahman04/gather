@@ -49,3 +49,29 @@ def test_masks_pem_block():
 ])
 def test_keeps_non_secrets(safe):
     assert mask_secrets(safe) == safe
+
+
+def test_journal_roundtrip_with_undo_and_torn_line(tmp_path):
+    from gather.session import Journal
+    s = Session(started=datetime(2026, 10, 13, 9, 0))
+    j = Journal.create(tmp_path, s)
+    for t in ("one", "two \ud800 lone", "three"):
+        s.add(t, "a.exe", "title", datetime(2026, 10, 13, 9, 1))
+        j.append(s.chunks[-1])
+    s.undo(); j.undo()
+    with open(j.path, "a", encoding="utf-8") as f:
+        f.write('{"text": "torn')  # process killed mid-write
+    [(rj, rs)] = Journal.recover(tmp_path)
+    assert rj.path == j.path and rs.started == s.started
+    assert [c.text for c in rs.chunks] == ["one", "two \ud800 lone"]
+    rj.delete(); rj.delete()
+    assert Journal.recover(tmp_path) == [] and Journal.recover(tmp_path / "nope") == []
+
+
+def test_journal_create_keeps_existing_chunks(tmp_path):
+    from gather.session import Journal
+    s = Session(started=datetime(2026, 10, 13, 9, 0))
+    s.add("kept", "a.exe", "t", datetime(2026, 10, 13, 9, 1))
+    Journal.create(tmp_path, s)
+    [(_, rs)] = Journal.recover(tmp_path)
+    assert [c.text for c in rs.chunks] == ["kept"]
