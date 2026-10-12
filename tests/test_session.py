@@ -28,6 +28,7 @@ def test_add_preserves_whitespace_and_ts():
 @pytest.mark.parametrize("secret", [
     "sk-" + "a" * 24, "sk-ant-api03-" + "Ab1_-" * 5, "sk-proj-" + "x" * 30,
     "sk-svcacct-" + "A_1-" * 8, "sk-" + "Ab1" * 16,
+    "sk-None-" + "AbC1" * 6, "sk-abc_DEF-" + "1" * 18,  # unknown prefixes / '_' must still mask
     "ghp_" + "A1" * 18, "gho_" + "b" * 36, "github_pat_" + "Z9_" * 10,
     "AKIA" + "ABCDEFGH12345678", "xoxb-1234567890-abcdef", "AIza" + "a" * 35,
 ])
