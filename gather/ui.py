@@ -247,5 +247,9 @@ class Pill:
         self._pulse = None
         self._paint(self.BG)
 
+    def saving(self) -> None:
+        """Show 'Saving…' while an export runs (contract; implemented in fix round 1)."""
+        raise NotImplementedError
+
     def hide(self) -> None:
         self.win.withdraw()
