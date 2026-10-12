@@ -97,7 +97,7 @@ def test_files_roundtrip(tmp_path):
 @pytest.fixture
 def watcher():
     hits, texts = threading.Event(), []
-    wt = win32.ClipboardWatcher(hits.set, lambda t, a, ti: texts.append((t, a, ti)))
+    wt = win32.ClipboardWatcher(hits.set, lambda t, a, ti: texts.append((t, a, ti)), mouse_trigger="Off")
     ok = wt.start()
     yield wt, ok, hits, texts
     wt.stop()
@@ -251,7 +251,7 @@ def test_failed_post_clears_hotkey_request(monkeypatch):
 
 
 def test_startup_registration_failure(monkeypatch):
-    wt = win32.ClipboardWatcher(lambda: None, lambda *args: None)
+    wt = win32.ClipboardWatcher(lambda: None, lambda *args: None, mouse_trigger="Off")
     monkeypatch.setattr(wt, "_register", lambda *args: False)
     try:
         assert wt.start() is False

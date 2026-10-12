@@ -14,7 +14,7 @@ from typing import Callable
 import pystray
 from PIL import Image, ImageDraw
 
-from .win32 import DEFAULT_HOTKEY, HOTKEYS
+from .win32 import DEFAULT_HOTKEY, HOTKEYS, DEFAULT_MOUSE_TRIGGER, MOUSE_TRIGGERS
 
 _FORMATS = ("md", "docx", "pdf")
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -27,6 +27,7 @@ class Config:
     format: str = "md"      # 'md' | 'docx' | 'pdf'
     mask: bool = True
     hotkey: str = DEFAULT_HOTKEY  # a win32.HOTKEYS name
+    mouse_trigger: str = DEFAULT_MOUSE_TRIGGER
 
     @staticmethod
     def path() -> Path:
@@ -45,6 +46,8 @@ class Config:
                 cfg.mask = d["mask"]
             if d.get("hotkey") in HOTKEYS:
                 cfg.hotkey = d["hotkey"]
+            if d.get("mouse_trigger") in MOUSE_TRIGGERS:
+                cfg.mouse_trigger = d["mouse_trigger"]
         except Exception:
             pass
         return cfg
@@ -55,7 +58,8 @@ class Config:
             p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_suffix(".json.tmp")
             tmp.write_text(json.dumps({"format": self.format, "mask": self.mask,
-                                       "hotkey": self.hotkey}), encoding="utf-8")
+                                       "hotkey": self.hotkey,
+                                       "mouse_trigger": self.mouse_trigger}), encoding="utf-8")
             os.replace(tmp, p)
 
 
@@ -117,8 +121,8 @@ class Tray:
 
     def __init__(self, cfg: Config, actions: dict[str, Callable[[], None]]) -> None:
         """actions keys: 'toggle', 'undo', 'cancel', 'copy_text', 'copy_path',
-        'open_folder', 'quit', 'autostart', and 'hotkey' (takes the preset name;
-        the app saves cfg.hotkey once it registers). Left-click = 'toggle'.
+        'open_folder', 'quit', 'autostart', 'hotkey' and 'mouse_trigger'
+        (take a preset name; the app saves it after applying). Left-click = 'toggle'.
         Format radio + mask checkbox edit cfg and cfg.save() directly."""
         self.cfg, self.actions = cfg, actions
         self.recording, self.count = False, 0
@@ -128,11 +132,13 @@ class Tray:
         self.icon = pystray.Icon("Gather", self._img[False], self._title(), self.menu)
 
     def _title(self) -> str:
+        triggers = [self.cfg.hotkey] if self.hotkey_ok else []
+        if self.cfg.mouse_trigger != "Off":
+            triggers.append(self.cfg.mouse_trigger)
+        hint = " / ".join(triggers) or "tray click"
         if self.recording:
-            return f"Gather — recording · {self.count} item{'' if self.count == 1 else 's'}"
-        if not self.hotkey_ok:
-            return "Gather — idle (click to start)"
-        return f"Gather — idle ({self.cfg.hotkey} to start)"
+            return f"Gather — recording · {self.count} item{'' if self.count == 1 else 's'} ({hint} to stop)"
+        return f"Gather — idle ({hint} to start)"
 
     def _hotkey(self) -> str:
         return self.cfg.hotkey if self.hotkey_ok else "no hotkey"
@@ -151,6 +157,9 @@ class Tray:
 
         def hk(name):
             return lambda icon, item: self.actions["hotkey"](name)
+
+        def mouse(name):
+            return lambda icon, item: self.actions["mouse_trigger"](name)
 
         def togglemask(icon, item):
             self.cfg.mask = not self.cfg.mask
@@ -173,6 +182,11 @@ class Tray:
             I("Hotkey", M(*[
                 I(name, hk(name), checked=lambda i, n=name: self.cfg.hotkey == n, radio=True)
                 for name in HOTKEYS
+            ])),
+            I("Mouse trigger", M(*[
+                I(label, mouse(name),
+                  checked=lambda i, n=name: self.cfg.mouse_trigger == n, radio=True)
+                for name, label in MOUSE_TRIGGERS.items()
             ])),
             I("Mask secrets", togglemask, checked=lambda i: self.cfg.mask),
             I("Start with Windows", self._act("autostart"), checked=lambda i: get_autostart()),

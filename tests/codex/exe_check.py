@@ -133,6 +133,10 @@ def main():
     process = None
     owned_pids = set()
     verified_path = None
+    # Reuse the blank native target used by the mouse tests; never click a user's app.
+    from test_mouse import target, middle, send
+    window = target.__wrapped__()
+    events, pump = next(window)
     with tempfile.TemporaryDirectory(prefix="gather-codex-config-") as settings:
         try:
             env = os.environ.copy()
@@ -152,7 +156,8 @@ def main():
             if not taken:
                 win32.user32.UnregisterHotKey(None, 9281)
             assert taken, "EXE has not registered its hotkey"
-            hotkey()
+            send(middle(), middle(True))
+            pump()
             time.sleep(0.3)
             for text in copies:
                 subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-Clipboard -Value '{text}'"],
@@ -168,7 +173,22 @@ def main():
             assert all(text.count(copy) == 1 for copy in copies)
             assert text.index(copies[0]) < text.index(copies[1])
             verified_path = path
-            print(f"PASS: EXE session, two ordered copies, Documents file, CF_HDROP={path.name}")
+            assert events == [], "EXE did not consume the middle click"
+            print(f"PASS: middle-click start, Alt+C stop, two ordered copies, CF_HDROP={path.name}")
+            # The reverse pairing proves both triggers remain available for start and stop.
+            win32.copy_text_to_clipboard("")
+            hotkey()
+            time.sleep(0.3)
+            subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-Clipboard -Value '{marker}-third'"],
+                           check=True, timeout=30)
+            time.sleep(0.3)
+            send(middle(), middle(True))
+            pump()
+            other = wait_for(clipboard_files)
+            assert len(other) == 1 and other[0] != path
+            assert marker + "-third" in other[0].read_text(encoding="utf-8")
+            assert events == []
+            print("PASS: Alt+C start, middle-click stop; consumed down/up")
         finally:
             try:
                 for pid in sorted(owned_pids, key=lambda pid: pid != process.pid):
@@ -185,11 +205,15 @@ def main():
                         candidate.unlink()
                         print(f"Deleted synthetic test file: {candidate.name}")
             finally:
-                restore_text(saved)
-                assert win32._get_clipboard_text() == saved
+                try:
+                    restore_text(saved)
+                    assert win32._get_clipboard_text() == saved
+                finally:
+                    window.close()
             assert not gather_processes(), "Gather process remains after EXE check"
             print("PASS: test EXE stopped; original clipboard text restored and verified")
 
 
 if __name__ == "__main__":
+    sys.modules["exe_check"] = sys.modules[__name__]
     main()

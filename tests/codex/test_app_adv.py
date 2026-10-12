@@ -19,7 +19,7 @@ def fake_app(tmp_path, monkeypatch, recording=True):
     """App without Tk/tray/watcher; output and journal folders under tmp_path."""
     app = App.__new__(App)
     app.q = queue.Queue()
-    app.cfg = SimpleNamespace(format="md", mask=True, hotkey="Alt+C",
+    app.cfg = SimpleNamespace(format="md", mask=True, hotkey="Alt+C", mouse_trigger="Middle-click",
                               save=lambda: setattr(app, "saved", app.cfg.hotkey))
     app.saved = None
     app.folder = tmp_path / "out"
@@ -33,7 +33,7 @@ def fake_app(tmp_path, monkeypatch, recording=True):
     app.pill_state = "hidden"
     app.watcher = SimpleNamespace(set_capturing=lambda on: setattr(app, "capturing", on),
                                   stop=lambda: setattr(app, "watcher_stopped", True),
-                                  hotkey="Alt+C")
+                                  hotkey="Alt+C", mouse_trigger="Middle-click")
     app.tray = SimpleNamespace(set_recording=lambda *args: None, stop=lambda: None, hotkey_ok=True,
                                notify=lambda *args: app.notifications.append(args[1]))
     app.pill = SimpleNamespace(hide=lambda: setattr(app, "pill_state", "hidden"),

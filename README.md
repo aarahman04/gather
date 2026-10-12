@@ -2,8 +2,8 @@
 
 Copy as many things as you like, from any app, then paste them all as **one file**.
 
-Press **Alt+C**, copy from your browser, terminal, editor, chat, anything.
-Press **Alt+C** again. Gather writes everything into one Markdown file and puts
+**Click your mouse wheel** (middle-click), then copy from your browser, terminal,
+editor, chat, anything. Middle-click again. Gather writes everything into one Markdown file and puts
 that *file* on your clipboard, so **Ctrl+V** in a folder, an editor or a chat's upload
 box pastes the file itself.
 
@@ -19,6 +19,7 @@ upload routine.
 **SmartScreen:** Gather is not code-signed, so the first launch of a downloaded copy may
 show "Windows protected your PC". Click **More info → Run anyway**. Windows Defender
 reports no threats on the release build.
+Security software may also flag programs that use global mouse hooks.
 
 Windows 11 hides new tray icons under the **^** arrow. Drag the Gather icon onto the
 taskbar if you want it always visible. You don't need it, though: a small red
@@ -28,7 +29,7 @@ taskbar if you want it always visible. You don't need it, though: a small red
 
 | | |
 |---|---|
-| Start / stop recording | **Alt+C**, or left-click the tray icon |
+| Start / stop recording | **Middle-click** (default), **Alt+C**, or left-click the tray icon |
 | While recording | every text copy is collected; the pill counts items |
 | After stopping | the file is on your clipboard. Press **Ctrl+V** wherever you want it |
 | While saving | the pill shows a grey **Saving…** (large PDFs take a few seconds); you can start a new session meanwhile |
@@ -36,6 +37,14 @@ taskbar if you want it always visible. You don't need it, though: a small red
 You always know the state: grey round tray icon = idle; red square icon, the pill
 at the top of the screen, and a short sound = recording. A notification names the file
 when you stop.
+
+**The default replaces normal middle-click in every app:** opening links in new tabs,
+closing tabs and autoscroll will stop working while Gather is running. This is intentional.
+To keep those actions, choose tray → **Mouse trigger → Alt + middle-click**;
+plain middle-click then works normally. Choose **Off** to remove the mouse hook entirely.
+Gather consumes the trigger's press and release and toggles once on the press.
+For Alt + middle-click, it sends an unassigned key (VK_E8) to prevent releasing Alt
+from activating the app's menu bar; it does not release your Alt key.
 
 **Where paste works**
 
@@ -69,6 +78,7 @@ Windows 11:
 - *Open Gather folder*: every session is saved in `Documents\Gather`, which doubles as your history
 - *Format*: Markdown (default), Word, or PDF
 - *Hotkey*: Alt+C (default), Win+Y, Pause, Scroll Lock, or Ctrl+Alt+G. Changes apply immediately and are saved in your config. If a key is taken by another app, Gather says so and keeps the previous working key; left-clicking the tray still works
+- *Mouse trigger*: Middle-click (default; replaces normal middle-click), Alt + middle-click, or Off. Changes apply immediately and are saved. A change during a held trigger waits for its release; if it stays held, retry after releasing it. If the hook cannot be installed, Gather switches this setting to Off and notifies you; keyboard and tray toggles keep working
 - *Mask secrets* (on by default): replaces things that are almost certainly API keys
   (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `AIza…`, private-key blocks) with `[masked]`,
   in the copied text and in window titles
@@ -106,9 +116,9 @@ Gather keeps recording the same session: fix the cause or switch format, then st
 git clone https://github.com/aarahman04/gather.git; cd gather
 python -m venv .venv; .\.venv\Scripts\pip install -r requirements-dev.txt
 .\.venv\Scripts\pythonw -m gather          # run
-.\.venv\Scripts\python -m pytest -q        # tests (they press Alt+C and Pause and use the clipboard)
+.\.venv\Scripts\python -m pytest -q        # tests send keyboard/mouse input and use the clipboard
 .\build.ps1                                 # -> dist\Gather.exe
 ```
 
-Python 3.12, Windows 10/11. Code: `gather/win32.py` (clipboard, hotkey; ctypes only),
+Python 3.12, Windows 10/11. Code: `gather/win32.py` (clipboard, hotkey, mouse hook; ctypes only),
 `session.py`, `writers.py`, `ui.py` (tray, pill), `__main__.py` (wiring).

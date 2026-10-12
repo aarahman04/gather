@@ -36,7 +36,7 @@ def capture():
         session.add(text, app, title)
         event.set()
 
-    watcher = win32.ClipboardWatcher(lambda: None, receive)
+    watcher = win32.ClipboardWatcher(lambda: None, receive, mouse_trigger="Off")
     watcher.start()
     watcher.set_capturing(True)
     try:
@@ -182,7 +182,7 @@ def test_owner_change_during_read_does_not_capture_self(capture, monkeypatch):
     watcher.set_capturing(False)
     external_text("codex-external-before-race")
     captured = []
-    probe = win32.ClipboardWatcher(lambda: None, lambda t, a, ti: captured.append(t))
+    probe = win32.ClipboardWatcher(lambda: None, lambda t, a, ti: captured.append(t), mouse_trigger="Off")
     probe.set_capturing(True)
 
     real_owner = win32.user32.GetClipboardOwner

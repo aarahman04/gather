@@ -40,11 +40,12 @@ class App:
                    ("toggle", "undo", "cancel", "copy_text", "copy_path",
                     "open_folder", "quit", "autostart")}
         actions["hotkey"] = lambda name: self.q.put(("hotkey_change", name))
+        actions["mouse_trigger"] = lambda name: self.q.put(("mouse_trigger_change", name))
         self.tray = ui.Tray(self.cfg, actions)
         self.watcher = win32.ClipboardWatcher(
             on_hotkey=lambda: self.q.put(("toggle",)),
             on_text=lambda text, app, title: self.q.put(("clip", text, app, title, datetime.now())),
-            hotkey=self.cfg.hotkey)
+            hotkey=self.cfg.hotkey, mouse_trigger=self.cfg.mouse_trigger)
 
     def run(self) -> None:
         self.tray.run_detached()
@@ -54,6 +55,11 @@ class App:
             self.tray.set_recording(False)
             self.tray.notify("Gather", f"{self.cfg.hotkey} is used by another app. Pick another in "
                                        "the tray (Hotkey), or click the tray icon to start/stop.")
+        if self.watcher.mouse_trigger != self.cfg.mouse_trigger:
+            try:
+                self.mouse_trigger_failed()
+            except OSError as e:
+                self.tray.notify("Gather error", f"Mouse trigger is Off, but couldn't save the setting ({e}).")
         self.recover()
         self.root.after(50, self.drain)
         self.root.mainloop()
@@ -144,6 +150,24 @@ class App:
                                        "or click the tray icon to start/stop.")
         self.tray.hotkey_ok = self.watcher.hotkey is not None
         self.tray.set_recording(self.session is not None, len(self.session or ()))
+
+    def mouse_trigger_failed(self) -> None:
+        self.cfg.mouse_trigger = self.watcher.mouse_trigger
+        self.tray.set_recording(self.session is not None, len(self.session or ()))
+        self.tray.notify("Gather", "Couldn't enable the mouse trigger. Mouse trigger is "
+                         f"{self.cfg.mouse_trigger}; the keyboard hotkey and tray still work.")
+        self.cfg.save()
+
+    def on_mouse_trigger_change(self, name: str) -> None:
+        if name == self.cfg.mouse_trigger and self.watcher.mouse_trigger == name:
+            return
+        if not self.watcher.set_mouse_trigger(name):
+            self.mouse_trigger_failed()
+            return
+        self.cfg.mouse_trigger = self.watcher.mouse_trigger
+        self.tray.set_recording(self.session is not None, len(self.session or ()))
+        self.cfg.save()
+        self.tray.notify("Gather", f"Mouse trigger is now {ui.MOUSE_TRIGGERS[name]}.")
 
     def on_quit(self) -> None:
         if self.session is not None:

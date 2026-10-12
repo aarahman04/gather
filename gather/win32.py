@@ -20,6 +20,7 @@ LRESULT = ctypes.c_ssize_t
 LPARAM = ctypes.c_ssize_t
 WPARAM = ctypes.c_size_t
 WNDPROC = ctypes.WINFUNCTYPE(LRESULT, w.HWND, w.UINT, WPARAM, LPARAM)
+HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, WPARAM, LPARAM)
 
 WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
@@ -28,6 +29,12 @@ WM_CLIPBOARDUPDATE = 0x031D
 HWND_MESSAGE = w.HWND(-3)
 WM_APP = 0x8000
 WM_SET_HOTKEY = WM_APP + 1  # private: swap the hotkey on the watcher thread
+WM_SET_MOUSE_TRIGGER = WM_APP + 2
+WM_MOUSE_TRIGGER = WM_APP + 3
+WH_MOUSE_LL = 14
+WM_MBUTTONDOWN, WM_MBUTTONUP = 0x207, 0x208
+WM_TIMER, CLIPBOARD_RETRY_TIMER = 0x113, 1
+OWN_INPUT_TAG = 0x47415448
 MOD_ALT, MOD_CONTROL, MOD_WIN, MOD_NOREPEAT = 0x1, 0x2, 0x8, 0x4000
 CF_UNICODETEXT, CF_HDROP = 13, 15
 GMEM_MOVEABLE = 0x0002
@@ -44,6 +51,17 @@ HOTKEYS: dict[str, tuple[int, int]] = {
     "Ctrl+Alt+G": (MOD_CONTROL | MOD_ALT, ord("G")),
 }
 DEFAULT_HOTKEY = "Alt+C"
+MOUSE_TRIGGERS = {
+    "Middle-click": "Middle-click (replaces normal middle-click)",
+    "Alt + middle-click": "Alt + middle-click",
+    "Off": "Off",
+}
+DEFAULT_MOUSE_TRIGGER = "Middle-click"
+
+
+class MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [("pt", w.POINT), ("mouseData", w.DWORD), ("flags", w.DWORD),
+                ("time", w.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
 
 
 class WNDCLASSW(ctypes.Structure):
@@ -83,6 +101,13 @@ _sig(user32, "PostMessageW", w.BOOL, w.HWND, w.UINT, WPARAM, LPARAM)
 _sig(user32, "PostQuitMessage", None, ctypes.c_int)
 _sig(user32, "RegisterHotKey", w.BOOL, w.HWND, ctypes.c_int, w.UINT, w.UINT)
 _sig(user32, "UnregisterHotKey", w.BOOL, w.HWND, ctypes.c_int)
+_sig(user32, "SetWindowsHookExW", w.HANDLE, ctypes.c_int, HOOKPROC, w.HINSTANCE, w.DWORD)
+_sig(user32, "UnhookWindowsHookEx", w.BOOL, w.HANDLE)
+_sig(user32, "CallNextHookEx", LRESULT, w.HANDLE, ctypes.c_int, WPARAM, LPARAM)
+_sig(user32, "GetAsyncKeyState", ctypes.c_short, ctypes.c_int)
+_sig(user32, "keybd_event", None, w.BYTE, w.BYTE, w.DWORD, ctypes.c_size_t)
+_sig(user32, "SetTimer", WPARAM, w.HWND, WPARAM, w.UINT, w.LPVOID)
+_sig(user32, "KillTimer", w.BOOL, w.HWND, WPARAM)
 _sig(user32, "AddClipboardFormatListener", w.BOOL, w.HWND)
 _sig(user32, "RemoveClipboardFormatListener", w.BOOL, w.HWND)
 _sig(user32, "OpenClipboard", w.BOOL, w.HWND)
@@ -157,7 +182,12 @@ def _get_clipboard_text(hwnd=None, for_capture=False) -> str | None:
     """CF_UNICODETEXT on the clipboard, or None if no text. With for_capture,
     None if the copy is our own or a password manager flagged it (checked while
     the clipboard is open, so the content can't change between check and read)."""
-    _open_clipboard(hwnd)
+    # Capture must yield to the message loop while locked, so mouse hooks don't time out.
+    if for_capture:
+        if not user32.OpenClipboard(hwnd):
+            raise ctypes.WinError(ctypes.get_last_error())
+    else:
+        _open_clipboard(hwnd)
     try:
         if for_capture:
             owner = user32.GetClipboardOwner()
@@ -219,15 +249,33 @@ def _wndproc(hwnd, msg, wparam, lparam):
                 wt._on_hotkey()
                 return 0
             if msg == WM_CLIPBOARDUPDATE:
+                wt._clipboard_retries = 0
+                wt._handle_update()
+                return 0
+            if msg == WM_TIMER and wparam == CLIPBOARD_RETRY_TIMER:
+                user32.KillTimer(hwnd, CLIPBOARD_RETRY_TIMER)
                 wt._handle_update()
                 return 0
             if msg == WM_SET_HOTKEY:
                 wt._swap_hotkey()
                 return 0
+            if msg == WM_SET_MOUSE_TRIGGER:
+                wt._swap_mouse_trigger()
+                return 0
+            if msg == WM_MOUSE_TRIGGER:
+                if wparam:
+                    # An unassigned key masks Alt's menu activation without a real shortcut.
+                    user32.keybd_event(0xE8, 0, 0, OWN_INPUT_TAG)
+                    user32.keybd_event(0xE8, 0, 2, OWN_INPUT_TAG)
+                wt._on_hotkey()
+                return 0
             if msg == WM_DESTROY:
-                user32.UnregisterHotKey(hwnd, wt._hotkey_id)
-                user32.RemoveClipboardFormatListener(hwnd)
-                user32.PostQuitMessage(0)
+                try:
+                    wt._unhook_mouse()
+                finally:
+                    user32.UnregisterHotKey(hwnd, wt._hotkey_id)
+                    user32.RemoveClipboardFormatListener(hwnd)
+                    user32.PostQuitMessage(0)
                 return 0
     except Exception:  # never let an exception kill the message loop
         import traceback
@@ -255,18 +303,27 @@ def _register_class() -> None:
 class ClipboardWatcher:
     """Hidden message-only window on its own daemon thread.
 
-    Receives WM_HOTKEY (one of HOTKEYS) and WM_CLIPBOARDUPDATE.
+    Receives WM_HOTKEY, WH_MOUSE_LL callbacks and WM_CLIPBOARDUPDATE.
     Callbacks run on the watcher thread; keep them cheap (caller enqueues).
     """
 
     def __init__(self, on_hotkey: Callable[[], None],
                  on_text: Callable[[str, str, str], None],
-                 hotkey: str = DEFAULT_HOTKEY) -> None:
+                 hotkey: str = DEFAULT_HOTKEY,
+                 mouse_trigger: str = DEFAULT_MOUSE_TRIGGER) -> None:
         """on_text(text, app, title): app = foreground process exe name
         (e.g. 'chrome.exe'), title = foreground window title at copy time.
         hotkey: a HOTKEYS name, registered by start()."""
         if hotkey not in HOTKEYS:
             raise ValueError(f"unknown hotkey {hotkey!r}")
+        if mouse_trigger not in MOUSE_TRIGGERS:
+            raise ValueError(f"unknown mouse trigger {mouse_trigger!r}")
+        self._want_mouse = mouse_trigger
+        self.mouse_trigger = "Off"
+        self._mouse_hook = None
+        self._mouse_proc = HOOKPROC(self._mouse_callback)  # keep alive until unhooked
+        self._mouse_swallowed = False
+        self._mouse_req = None
         self._want = hotkey
         self.hotkey: str | None = None  # name currently registered, None if none
         self._hotkey_id = HOTKEY_ID
@@ -276,6 +333,7 @@ class ClipboardWatcher:
         self._on_hotkey = on_hotkey
         self._on_text = on_text
         self._capturing = False
+        self._clipboard_retries = 0
         self._hwnd = None
         self._ready = threading.Event()
         self._error: BaseException | None = None
@@ -337,6 +395,73 @@ class ClipboardWatcher:
         """When False, clipboard updates are ignored (clipboard not read)."""
         self._capturing = bool(on)
 
+    def set_mouse_trigger(self, name: str) -> bool:
+        if name not in MOUSE_TRIGGERS:
+            raise ValueError(f"unknown mouse trigger {name!r}")
+        with self._lock:
+            if not self._hwnd:
+                return False
+            if name == self.mouse_trigger:
+                return True
+            done, result = threading.Event(), []
+            with self._req_lock:
+                self._mouse_req = (name, done, result)
+                if not user32.PostMessageW(self._hwnd, WM_SET_MOUSE_TRIGGER, 0, 0):
+                    self._mouse_req = None
+                    return False
+            done.wait(2)
+            with self._req_lock:
+                self._mouse_req = None
+                return bool(result and result[0])
+
+    def _unhook_mouse(self) -> None:
+        if self._mouse_hook:
+            if not user32.UnhookWindowsHookEx(self._mouse_hook):
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._mouse_hook = None
+        self.mouse_trigger = "Off"
+
+    def _install_mouse(self, name: str) -> bool:
+        if name == "Off":
+            return True
+        self._mouse_hook = user32.SetWindowsHookExW(
+            WH_MOUSE_LL, self._mouse_proc, kernel32.GetModuleHandleW(None), 0)
+        if not self._mouse_hook:
+            return False
+        self.mouse_trigger = name
+        return True
+
+    def _swap_mouse_trigger(self) -> None:
+        with self._req_lock:
+            # Finish a consumed click before removing its hook; never orphan its release.
+            if self._mouse_req is None or self._mouse_swallowed:
+                return
+            (name, done, result), self._mouse_req = self._mouse_req, None
+            try:
+                self._unhook_mouse()
+                result.append(self._install_mouse(name))
+            finally:
+                done.set()
+
+    def _mouse_callback(self, code, msg, data):
+        if code >= 0 and msg in (WM_MBUTTONDOWN, WM_MBUTTONUP):
+            event = ctypes.cast(data, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+            if event.dwExtraInfo != OWN_INPUT_TAG:
+                if msg == WM_MBUTTONUP and self._mouse_swallowed:
+                    self._mouse_swallowed = False
+                    user32.PostMessageW(self._hwnd, WM_SET_MOUSE_TRIGGER, 0, 0)
+                    return 1
+                if msg == WM_MBUTTONDOWN:
+                    if self._mouse_swallowed:
+                        return 1
+                    alt = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
+                    if (self.mouse_trigger == "Middle-click" or
+                            self.mouse_trigger == "Alt + middle-click" and alt):
+                        if user32.PostMessageW(self._hwnd, WM_MOUSE_TRIGGER, int(alt), 0):
+                            self._mouse_swallowed = True
+                            return 1
+        return user32.CallNextHookEx(self._mouse_hook, code, msg, data)
+
     def stop(self) -> None:
         """Unregister hotkey + listener, destroy window, end thread."""
         global _owner_hwnd
@@ -346,6 +471,8 @@ class ClipboardWatcher:
             user32.PostMessageW(self._hwnd, WM_CLOSE, 0, 0)  # DefWindowProc -> DestroyWindow
         if self._thread:
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                raise RuntimeError("Gather's watcher did not stop")
             self._thread = None
 
     def _run(self) -> None:
@@ -363,21 +490,33 @@ class ClipboardWatcher:
                 self.hotkey = self._want
             if not user32.AddClipboardFormatListener(hwnd):
                 raise ctypes.WinError(ctypes.get_last_error())
+            self._install_mouse(self._want_mouse)
             _owner_hwnd = hwnd
         except BaseException as e:
+            if self._hwnd:
+                user32.DestroyWindow(self._hwnd)
+                _watchers.pop(self._hwnd, None)
+                self._hwnd = None
             self._error = e
             self._ready.set()
             return
         self._ready.set()
         msg = w.MSG()
-        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
-        _watchers.pop(hwnd, None)
-        self._hwnd = None
-        self.hotkey = None
+        try:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+        finally:
+            try:
+                self._unhook_mouse()
+            finally:
+                _watchers.pop(hwnd, None)
+                self._hwnd = None
+                self.hotkey = None
+                self._mouse_swallowed = False
 
     def _handle_update(self) -> None:
+        user32.KillTimer(self._hwnd, CLIPBOARD_RETRY_TIMER)
         if not self._capturing:
             return
         owner = user32.GetClipboardOwner()
@@ -386,7 +525,10 @@ class ClipboardWatcher:
         try:
             text = _get_clipboard_text(self._hwnd, for_capture=True)
         except OSError:
-            return  # clipboard stayed locked; drop this update
+            if self._clipboard_retries < 50:
+                self._clipboard_retries += 1
+                user32.SetTimer(self._hwnd, CLIPBOARD_RETRY_TIMER, 20, None)
+            return
         if text:
             app, title = _foreground_info()  # after the read: snapshot first
             self._on_text(text, app, title)

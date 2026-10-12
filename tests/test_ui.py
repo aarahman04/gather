@@ -48,10 +48,11 @@ def test_tray_menu(tmp_path, monkeypatch):
     keys = "toggle undo cancel copy_text copy_path open_folder quit autostart".split()
     actions = {k: (lambda k=k: calls.append(k)) for k in keys}
     actions["hotkey"] = lambda name: calls.append(("hotkey", name))
+    actions["mouse_trigger"] = lambda name: calls.append(("mouse_trigger", name))
     t = ui.Tray(ui.Config(), actions)
     items = list(t.menu.items)
     assert items[0].text == "Start recording (Alt+C)"
-    assert t._title() == "Gather — idle (Alt+C to start)"
+    assert t._title() == "Gather — idle (Alt+C / Middle-click to start)"
     assert items[0].default
     undo, cancel = items[1], items[2]
     assert not undo.enabled and not cancel.enabled
@@ -81,7 +82,17 @@ def test_tray_menu(tmp_path, monkeypatch):
     assert items[0].text == "Start recording (Pause)"
     t.hotkey_ok = False
     assert items[0].text == "Start recording (no hotkey)"
-    assert t._title() == "Gather — idle (click to start)"
+    assert t._title() == "Gather — idle (Middle-click to start)"
+    mouse = list(items[names.index("Mouse trigger")].submenu.items)
+    assert [i.text for i in mouse] == ["Middle-click (replaces normal middle-click)", "Alt + middle-click", "Off"]
+    assert [i.checked for i in mouse] == [True, False, False]
+    calls.clear()
+    mouse[1](t.icon)
+    assert calls == [("mouse_trigger", "Alt + middle-click")]
+    assert t.cfg.mouse_trigger == "Middle-click"
+    t.cfg.mouse_trigger = "Off"
+    assert [i.checked for i in mouse] == [False, False, True]
+    assert t._title() == "Gather — idle (tray click to start)"
     calls.clear()
     items[0](t.icon)
     assert calls == ["toggle"]
