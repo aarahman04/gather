@@ -31,6 +31,7 @@ taskbar if you want it always visible. You don't need it, though: a small red
 | Start / stop recording | **Ctrl+Alt+G**, or left-click the tray icon |
 | While recording | every text copy is collected; the pill counts items |
 | After stopping | the file is on your clipboard. Press **Ctrl+V** wherever you want it |
+| While saving | the pill shows a grey **Saving…** (large PDFs take a few seconds); you can start a new session meanwhile |
 
 You always know the state: grey round tray icon = idle; red square icon, the pill
 at the top of the screen, and a short sound = recording. A notification names the file
@@ -52,7 +53,8 @@ when you stop.
 - *Open Gather folder*: every session is saved in `Documents\Gather`, which doubles as your history
 - *Format*: Markdown (default), Word, or PDF
 - *Mask secrets* (on by default): replaces things that are almost certainly API keys
-  (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `AIza…`, private-key blocks) with `[masked]`
+  (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `AIza…`, private-key blocks) with `[masked]`,
+  in the copied text and in window titles
 - *Start with Windows*, *Quit*
 
 **What goes in the file**
@@ -74,6 +76,12 @@ Gather keeps the copied text exactly as it was copied. It skips a copy that is t
 as the one before it (apps often fire twice), ignores non-text copies (images, files),
 and ignores copies that password managers mark as private. Settings live in
 `%APPDATA%\Gather\config.json`.
+
+**Nothing gets lost.** While recording, each copy is also appended to a small file in
+`%APPDATA%\Gather\unsaved\` (raw, unmasked text, deleted once the session's file is saved).
+If Gather crashes or is killed, the next start saves that session to `Documents\Gather`
+and tells you (it doesn't touch your clipboard). If saving fails (disk full, folder locked),
+Gather keeps recording the same session: fix the cause or switch format, then stop again.
 
 ## Run from source / build
 
