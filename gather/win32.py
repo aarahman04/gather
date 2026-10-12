@@ -143,10 +143,14 @@ def _text_bytes(text: str) -> bytes:
     return (text + "\0").encode("utf-16-le")
 
 
-def _get_clipboard_text(hwnd=None) -> str | None:
-    """CF_UNICODETEXT on the clipboard, or None if no text."""
+def _get_clipboard_text(hwnd=None, skip_excluded=False) -> str | None:
+    """CF_UNICODETEXT on the clipboard, or None if no text. With skip_excluded,
+    None if a password manager flagged the copy (checked while the clipboard is
+    open, so the content can't change between check and read)."""
     _open_clipboard(hwnd)
     try:
+        if skip_excluded and user32.IsClipboardFormatAvailable(CF_EXCLUDE):
+            return None
         if not user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
             return None
         h = user32.GetClipboardData(CF_UNICODETEXT)
@@ -309,11 +313,9 @@ class ClipboardWatcher:
         owner = user32.GetClipboardOwner()
         if owner and _window_pid(owner) == os.getpid():
             return  # our own write
-        if user32.IsClipboardFormatAvailable(CF_EXCLUDE):
-            return  # password manager asked monitors to ignore this copy
         app, title = _foreground_info()
         try:
-            text = _get_clipboard_text(self._hwnd)
+            text = _get_clipboard_text(self._hwnd, skip_excluded=True)
         except OSError:
             return  # clipboard stayed locked; drop this update
         if text:
