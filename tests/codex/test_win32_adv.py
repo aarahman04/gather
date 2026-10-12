@@ -73,7 +73,7 @@ print(time.monotonic() - start)
     assert [c.text for c in session.chunks] == [f"codex-rapid-{i:02d}" for i in range(50)]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="F7: metadata blocks clipboard snapshots")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="F7 deferred: Windows keeps only the latest clipboard state, so copies made while the listener is stalled are unrecoverable by design; a separate metadata thread would add complexity for an artificial stall. Text is now read before the metadata lookup, which shrinks the window.")
 def test_rapid_copies_survive_a_slow_foreground_query(capture, monkeypatch):
     _, session, _ = capture
     entered, release = threading.Event(), threading.Event()
@@ -135,8 +135,8 @@ def test_unicode_clipboard_capture(capture, name):
     assert [c.text for c in session.chunks] == [TRICKY[name].replace("\r\n", "\n")]
 
 
+# Was xfail (F4) in Codex's review; fixed by raising the _open_clipboard retry budget to ~1 s.
 @pytest.mark.parametrize("kind", ["text", "files"])
-@pytest.mark.xfail(strict=True, raises=OSError, reason="F4: retry budget is only 200 ms")
 def test_write_waits_for_500ms_clipboard_lock(kind, tmp_path):
     holder = subprocess.Popen([sys.executable, "-c", """
 import time
@@ -168,7 +168,7 @@ finally:
         assert holder.returncode == 0
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="F9: encoding occurs after EmptyClipboard")
+# Was xfail (F9) in Codex's review; fixed by encoding payloads before opening/emptying the clipboard.
 def test_encoding_failure_preserves_previous_clipboard():
     win32.copy_text_to_clipboard("codex-before-failure")
     with pytest.raises(UnicodeEncodeError):
@@ -176,7 +176,7 @@ def test_encoding_failure_preserves_previous_clipboard():
     assert win32._get_clipboard_text() == "codex-before-failure"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="F5: owner checked before clipboard lock")
+# Was xfail (F5) in Codex's review; fixed by re-checking the owner while the clipboard is open, before the read.
 def test_owner_change_during_read_does_not_capture_self(capture, monkeypatch):
     watcher, _, _ = capture
     watcher.set_capturing(False)
@@ -185,13 +185,21 @@ def test_owner_change_during_read_does_not_capture_self(capture, monkeypatch):
     probe = win32.ClipboardWatcher(lambda: None, lambda t, a, ti: captured.append(t))
     probe.set_capturing(True)
 
-    def interleave():
-        win32.copy_text_to_clipboard("codex-own-write-during-read")
-        return "codex.exe", "synthetic"
+    real_owner = win32.user32.GetClipboardOwner
+    fired = []
 
-    monkeypatch.setattr(win32, "_foreground_info", interleave)
+    def interleave():
+        # Metadata now runs after the read, so inject the own write right after the early
+        # (unlocked) owner check returns a stale external owner, i.e. before the read.
+        owner = real_owner()
+        if not fired:
+            fired.append(True)
+            win32.copy_text_to_clipboard("codex-own-write-during-read")
+        return owner
+
+    monkeypatch.setattr(win32.user32, "GetClipboardOwner", interleave)
     probe._handle_update()
-    assert captured == []
+    assert fired and captured == []
 
 
 @pytest.mark.parametrize("failure", ["alloc", "lock", "set"])

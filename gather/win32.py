@@ -114,7 +114,7 @@ _mutex = None
 
 def _open_clipboard(hwnd=None) -> None:
     # Clipboard is often briefly locked by another app (or a clipboard manager).
-    for _ in range(10):
+    for _ in range(50):  # ~1 s total
         if user32.OpenClipboard(hwnd):
             return
         time.sleep(0.02)
@@ -143,14 +143,18 @@ def _text_bytes(text: str) -> bytes:
     return (text + "\0").encode("utf-16-le")
 
 
-def _get_clipboard_text(hwnd=None, skip_excluded=False) -> str | None:
-    """CF_UNICODETEXT on the clipboard, or None if no text. With skip_excluded,
-    None if a password manager flagged the copy (checked while the clipboard is
-    open, so the content can't change between check and read)."""
+def _get_clipboard_text(hwnd=None, for_capture=False) -> str | None:
+    """CF_UNICODETEXT on the clipboard, or None if no text. With for_capture,
+    None if the copy is our own or a password manager flagged it (checked while
+    the clipboard is open, so the content can't change between check and read)."""
     _open_clipboard(hwnd)
     try:
-        if skip_excluded and user32.IsClipboardFormatAvailable(CF_EXCLUDE):
-            return None
+        if for_capture:
+            owner = user32.GetClipboardOwner()
+            if owner and _window_pid(owner) == os.getpid():
+                return None
+            if user32.IsClipboardFormatAvailable(CF_EXCLUDE):
+                return None
         if not user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
             return None
         h = user32.GetClipboardData(CF_UNICODETEXT)
@@ -312,13 +316,13 @@ class ClipboardWatcher:
             return
         owner = user32.GetClipboardOwner()
         if owner and _window_pid(owner) == os.getpid():
-            return  # our own write
-        app, title = _foreground_info()
+            return  # our own write (fast path; re-checked under the clipboard lock)
         try:
-            text = _get_clipboard_text(self._hwnd, skip_excluded=True)
+            text = _get_clipboard_text(self._hwnd, for_capture=True)
         except OSError:
             return  # clipboard stayed locked; drop this update
         if text:
+            app, title = _foreground_info()  # after the read: snapshot first
             self._on_text(text, app, title)
 
 
@@ -328,23 +332,27 @@ def copy_files_to_clipboard(paths: list[str], text: str | None = None) -> None:
     ClipboardWatcher as a capture."""
     df = DROPFILES(pFiles=ctypes.sizeof(DROPFILES), fWide=1)
     files = "".join(str(p) + "\0" for p in paths) + "\0"
+    # Encode everything before EmptyClipboard so an encoding error keeps the old clipboard.
+    hdrop = bytes(df) + files.encode("utf-16-le")
+    text_bytes = None if text is None else _text_bytes(text)
     _open_clipboard(_owner_hwnd)
     try:
         user32.EmptyClipboard()
-        _set_global(CF_HDROP, bytes(df) + files.encode("utf-16-le"))
+        _set_global(CF_HDROP, hdrop)
         _set_global(CF_PREFERRED_DROPEFFECT, (1).to_bytes(4, "little"))  # DROPEFFECT_COPY
-        if text is not None:
-            _set_global(CF_UNICODETEXT, _text_bytes(text))
+        if text_bytes is not None:
+            _set_global(CF_UNICODETEXT, text_bytes)
     finally:
         user32.CloseClipboard()
 
 
 def copy_text_to_clipboard(text: str) -> None:
     """Set CF_UNICODETEXT. Must never be seen by ClipboardWatcher as a capture."""
+    data = _text_bytes(text)  # encode first: an error must not empty the clipboard
     _open_clipboard(_owner_hwnd)
     try:
         user32.EmptyClipboard()
-        _set_global(CF_UNICODETEXT, _text_bytes(text))
+        _set_global(CF_UNICODETEXT, data)
     finally:
         user32.CloseClipboard()
 
