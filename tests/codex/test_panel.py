@@ -320,6 +320,7 @@ def settle_ui(app, timeout=2):
 
 
 @pytest.mark.parametrize("origin,destination", [(i, j) for i in range(3) for j in range(3)])
+@pytest.mark.desktop
 def test_widget_drop_lands_at_marker_in_both_directions(panel_app, origin, destination):
     app, pill = panel_app, panel_app.pill
     for text in ("first", "middle", "last"):
@@ -341,6 +342,7 @@ def test_widget_drop_lands_at_marker_in_both_directions(panel_app, origin, desti
     assert app.root.grab_current() is None
 
 
+@pytest.mark.desktop
 def test_new_copy_during_drag_keeps_handle_mapped_and_mouse_grab(panel_app):
     app, pill = panel_app, panel_app.pill
     for text in ("first", "middle", "last"):
@@ -366,6 +368,7 @@ def test_new_copy_during_drag_keeps_handle_mapped_and_mouse_grab(panel_app):
     assert app.root.grab_current() is None
 
 
+@pytest.mark.desktop
 def test_whole_masked_row_tracks_pointer_and_neighbours_slide(panel_app):
     app, pill = panel_app, panel_app.pill
     for text in ("first", "middle", "sk-" + "A" * 32):
@@ -398,6 +401,7 @@ def test_whole_masked_row_tracks_pointer_and_neighbours_slide(panel_app):
 
 
 @pytest.mark.parametrize("failure", ["outside", "journal"])
+@pytest.mark.desktop
 def test_drag_cancel_or_journal_failure_restores_row_positions(panel_app, monkeypatch, failure):
     app, pill = panel_app, panel_app.pill
     for text in ("first", "middle", "last"):
@@ -424,6 +428,7 @@ def test_drag_cancel_or_journal_failure_restores_row_positions(panel_app, monkey
         assert "order unchanged" in app.notifications[-1]
 
 
+@pytest.mark.desktop
 def test_grabbing_a_moving_row_does_not_jump(panel_app):
     app, pill = panel_app, panel_app.pill
     for text in ("first", "middle", "last"):
@@ -446,6 +451,7 @@ def test_grabbing_a_moving_row_does_not_jump(panel_app):
     assert row["frame"].winfo_y() == 0 and app.root.grab_current() is None
 
 
+@pytest.mark.desktop
 def test_edge_scroll_continues_while_held_and_release_does_not_scroll_again(panel_app):
     app, pill = panel_app, panel_app.pill
     for i in range(15):
@@ -470,6 +476,7 @@ def test_edge_scroll_continues_while_held_and_release_does_not_scroll_again(pane
 
 
 @pytest.mark.parametrize("cancel", ["outside", "collapse", "undo"])
+@pytest.mark.desktop
 def test_cancel_drag_releases_capture_and_timers(panel_app, cancel):
     app, pill = panel_app, panel_app.pill
     for i in range(10):
@@ -491,6 +498,7 @@ def test_cancel_drag_releases_capture_and_timers(panel_app, cancel):
     assert pill._drag_id is None and not pill.marker.winfo_ismapped()
 
 
+@pytest.mark.desktop
 def test_eased_rows_panel_and_vector_arrow_keep_focus(panel_app):
     app, pill = panel_app, panel_app.pill
     for text in ("first", "middle", "last"):
@@ -518,6 +526,7 @@ def test_eased_rows_panel_and_vector_arrow_keep_focus(panel_app):
     assert foreground() == source
 
 
+@pytest.mark.desktop
 def test_rapid_toggle_reverse_and_stop_cancel_animation(panel_app):
     app, pill = panel_app, panel_app.pill
     pill._motion = True
@@ -531,6 +540,7 @@ def test_rapid_toggle_reverse_and_stop_cancel_animation(panel_app):
     assert pill._panel_timer is None and not pill.panel.winfo_ismapped()
 
 
+@pytest.mark.desktop
 def test_native_drag_and_keyboard_focus_stay_in_source(panel_app, target):
     app, pill = panel_app, panel_app.pill
     _, pump = target
@@ -553,6 +563,7 @@ def test_native_drag_and_keyboard_focus_stay_in_source(panel_app, target):
     assert win32.user32.GetFocus() == source_focus
 
 
+@pytest.mark.desktop
 def test_pill_body_passes_actual_left_click_to_source(panel_app, target):
     pill, root = panel_app.pill, panel_app.root
     _, pump = target
@@ -577,6 +588,7 @@ def test_pill_body_passes_actual_left_click_to_source(panel_app, target):
         assert ui._comctl32.RemoveWindowSubclass(source, clicked, 42)
 
 
+@pytest.mark.desktop
 def test_destroy_removes_all_overlay_windows_and_native_subclasses(target):
     # A fresh process tests actual quit, with the single Tk interpreter used by Gather.
     subprocess.run([sys.executable, "-c", '''
@@ -594,6 +606,7 @@ assert not any(win32.user32.IsWindow(hwnd) for hwnd in handles)
 '''], check=True, timeout=20)
 
 
+@pytest.mark.desktop
 def test_chevron_cross_rows_live_updates_and_no_activation(panel_app, target):
     app, pill = panel_app, panel_app.pill
     _, pump = target
@@ -628,6 +641,7 @@ def test_chevron_cross_rows_live_updates_and_no_activation(panel_app, target):
         assert win32.user32.SendMessageW(hwnd, 0x21, hwnd, 0x02010001) == 3
 
 
+@pytest.mark.desktop
 def test_simulated_widget_drag_marker_reorders_and_alt_z_uses_capture_order(panel_app):
     app, pill = panel_app, panel_app.pill
     for text in ("first", "middle", "last"):
@@ -648,6 +662,7 @@ def test_simulated_widget_drag_marker_reorders_and_alt_z_uses_capture_order(pane
 
 
 @pytest.mark.parametrize("text", ["W" * 60, "界" * 60])
+@pytest.mark.desktop
 def test_wide_preview_fits_with_ellipsis_and_panel_does_not_jump(panel_app, text):
     app, pill = panel_app, panel_app.pill
     pill.chevron.invoke(); app.root.update()
@@ -662,6 +677,7 @@ def test_wide_preview_fits_with_ellipsis_and_panel_does_not_jump(panel_app, text
     assert pill.panel.winfo_x() == x
 
 
+@pytest.mark.desktop
 def test_scroll_many_items_and_collapse_on_saving_stop_cancel(panel_app):
     app, pill = panel_app, panel_app.pill
     for i in range(10):
@@ -687,6 +703,7 @@ def test_scroll_many_items_and_collapse_on_saving_stop_cancel(panel_app):
     assert not pill.expanded and not pill.panel.winfo_ismapped()
 
 
+@pytest.mark.desktop
 def test_keyboard_and_middle_trigger_with_panel_open(panel_app, target):
     app, pill = panel_app, panel_app.pill
     _, pump = target
@@ -709,6 +726,7 @@ def test_keyboard_and_middle_trigger_with_panel_open(panel_app, target):
 
 
 @pytest.mark.parametrize("factor,area", [(1.25, (0, 0, 1280, 720)), (1.5, (0, 0, 640, 480))])
+@pytest.mark.desktop
 def test_layout_clamps_scaled_panel_to_small_work_area(panel_app, monkeypatch, factor, area):
     pill = panel_app.pill
     pill.scale = factor

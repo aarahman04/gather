@@ -36,8 +36,11 @@ ALT_C, PAUSE = (0x12, ord("C")), (0x13,)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def restore_clipboard():
+def restore_clipboard(request):
     """It's the user's live machine: put their clipboard text back afterwards."""
+    if request.config.getoption("--no-desktop"):
+        yield
+        return
     try:
         saved = win32._get_clipboard_text()
     except OSError:
@@ -63,11 +66,13 @@ def wait_for(pred, timeout):
     return pred()
 
 
+@pytest.mark.desktop
 def test_text_roundtrip():
     win32.copy_text_to_clipboard("gather ✓ ünïcode")
     assert win32._get_clipboard_text() == "gather ✓ ünïcode"
 
 
+@pytest.mark.desktop
 def test_files_roundtrip(tmp_path):
     files = [tmp_path / "a.txt", tmp_path / "b ü.md"]
     for f in files:
@@ -104,6 +109,7 @@ def watcher():
     assert wt._thread is None
 
 
+@pytest.mark.desktop
 def test_watcher_captures_external_only(watcher):
     wt, _, _, texts = watcher
     wt.set_capturing(True)
@@ -124,6 +130,7 @@ def test_watcher_captures_external_only(watcher):
     assert texts == []
 
 
+@pytest.mark.desktop
 def test_password_manager_copy_ignored(watcher):
     wt, _, _, texts = watcher
     wt.set_capturing(True)
@@ -139,6 +146,7 @@ def test_password_manager_copy_ignored(watcher):
     assert texts == []
 
 
+@pytest.mark.desktop
 def test_hotkey(watcher):
     wt, ok, hits, _ = watcher
     if not ok:
@@ -148,6 +156,7 @@ def test_hotkey(watcher):
     assert hits.wait(2)
 
 
+@pytest.mark.desktop
 def test_set_hotkey(watcher):
     wt, ok, hits, _ = watcher
     if not ok:
@@ -250,6 +259,7 @@ def test_failed_post_clears_hotkey_request(monkeypatch):
     assert wt._req is None and wt.hotkey == "Alt+C"
 
 
+@pytest.mark.desktop
 def test_startup_registration_failure(monkeypatch):
     wt = win32.ClipboardWatcher(lambda: None, lambda *args: None, mouse_trigger="Off")
     monkeypatch.setattr(wt, "_register", lambda *args: False)
@@ -261,6 +271,7 @@ def test_startup_registration_failure(monkeypatch):
     assert wt._hwnd is None
 
 
+@pytest.mark.desktop
 def test_timed_out_hotkey_request_does_not_apply_later(watcher, monkeypatch):
     wt, ok, hits, _ = watcher
     if not ok:

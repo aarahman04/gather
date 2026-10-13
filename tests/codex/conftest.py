@@ -5,7 +5,10 @@ from live_safety import restore_text
 
 
 @pytest.fixture(autouse=True)
-def preserve_clipboard_text():
+def preserve_clipboard_text(request):
+    if request.config.getoption("--no-desktop"):
+        yield
+        return
     saved = win32._get_clipboard_text()
     try:
         yield

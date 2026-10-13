@@ -46,6 +46,7 @@ def capture():
         assert watcher._hwnd is None
 
 
+@pytest.mark.desktop
 def test_5mb_clipboard_is_captured_exactly(capture):
     _, session, event = capture
     text = "0123456789abcdef" * (5 * 1024 * 1024 // 16)
@@ -55,6 +56,7 @@ def test_5mb_clipboard_is_captured_exactly(capture):
     assert [c.text for c in session.chunks] == [text]
 
 
+@pytest.mark.desktop
 def test_50_copies_in_two_seconds_keep_order(capture):
     _, session, _ = capture
     result = child("""
@@ -74,6 +76,7 @@ print(time.monotonic() - start)
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason="F7 deferred: Windows keeps only the latest clipboard state, so copies made while the listener is stalled are unrecoverable by design; a separate metadata thread would add complexity for an artificial stall. Text is now read before the metadata lookup, which shrinks the window.")
+@pytest.mark.desktop
 def test_rapid_copies_survive_a_slow_foreground_query(capture, monkeypatch):
     _, session, _ = capture
     entered, release = threading.Event(), threading.Event()
@@ -104,6 +107,7 @@ for i in range(1, 6):
 
 
 @pytest.mark.parametrize("fmt", ["image", "files"])
+@pytest.mark.desktop
 def test_nontext_is_ignored(capture, fmt, tmp_path):
     _, session, event = capture
     path = tmp_path / "nontext.txt"
@@ -128,6 +132,7 @@ else:
 
 
 @pytest.mark.parametrize("name", ["surrogates", "rtl", "zero_width", "crlf", "emoji_cjk"])
+@pytest.mark.desktop
 def test_unicode_clipboard_capture(capture, name):
     _, session, event = capture
     external_text(TRICKY[name])
@@ -137,6 +142,7 @@ def test_unicode_clipboard_capture(capture, name):
 
 # Was xfail (F4) in Codex's review; fixed by raising the _open_clipboard retry budget to ~1 s.
 @pytest.mark.parametrize("kind", ["text", "files"])
+@pytest.mark.desktop
 def test_write_waits_for_500ms_clipboard_lock(kind, tmp_path):
     holder = subprocess.Popen([sys.executable, "-c", """
 import time
@@ -169,6 +175,7 @@ finally:
 
 
 # Was xfail (F9) in Codex's review; fixed by encoding payloads before opening/emptying the clipboard.
+@pytest.mark.desktop
 def test_encoding_failure_preserves_previous_clipboard():
     win32.copy_text_to_clipboard("codex-before-failure")
     with pytest.raises(UnicodeEncodeError):
@@ -177,6 +184,7 @@ def test_encoding_failure_preserves_previous_clipboard():
 
 
 # Was xfail (F5) in Codex's review; fixed by re-checking the owner while the clipboard is open, before the read.
+@pytest.mark.desktop
 def test_owner_change_during_read_does_not_capture_self(capture, monkeypatch):
     watcher, _, _ = capture
     watcher.set_capturing(False)

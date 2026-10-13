@@ -1,4 +1,5 @@
 import threading
+import json
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -19,6 +20,16 @@ def test_config_roundtrip_and_corrupt(tmp_path, monkeypatch):
     assert ui.Config.load() == ui.Config()
     ui.Config(hotkey="Pause").save()
     assert ui.Config.load().hotkey == "Pause"
+
+
+def test_save_folder_config_roundtrip_and_invalid_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    folder = str(tmp_path / "chosen folder")
+    ui.Config(folder=folder).save()
+    assert ui.Config.load().folder == folder
+    for value in (None, 4, "", "relative/path", "C:\\invalid\0path"):
+        ui.Config.path().write_text(json.dumps({"folder": value}))
+        assert ui.Config.load().folder == ""
 
 
 def test_autostart():
@@ -62,7 +73,7 @@ def test_chevron_is_a_scaled_vector_image():
 def test_tray_menu(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     calls = []
-    keys = "toggle undo cancel copy_text copy_path open_folder help quit autostart".split()
+    keys = "toggle undo cancel copy_text copy_path open_folder save_folder help quit autostart".split()
     actions = {k: (lambda k=k: calls.append(k)) for k in keys}
     actions["hotkey"] = lambda name: calls.append(("hotkey", name))
     actions["mouse_trigger"] = lambda name: calls.append(("mouse_trigger", name))
@@ -88,6 +99,9 @@ def test_tray_menu(tmp_path, monkeypatch):
     calls.clear()
     next(i for i in items if i.text == "Help")(t.icon)
     assert calls == ["help"]
+    calls.clear()
+    next(i for i in items if i.text == "Save folder…")(t.icon)
+    assert calls == ["save_folder"]
     fmt = [i for i in items if i.text == "Format"][0]
     pdf = list(fmt.submenu.items)[2]
     pdf(t.icon)
@@ -173,6 +187,7 @@ def test_concurrent_config_saves_keep_valid_preferences(tmp_path, monkeypatch):
     assert ui.Config.load() == ui.Config("pdf", False, "Pause")
 
 
+@pytest.mark.desktop
 def test_pill():
     try:
         root = tk.Tk()

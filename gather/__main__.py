@@ -24,7 +24,7 @@ class App:
         self.journal: Journal | None = None  # on-disk copy of self.session
         self.last_path: Path | None = None
         self.last_text: str | None = None
-        self.folder = win32.documents_dir() / "Gather"
+        self.folder = Path(self.cfg.folder) if self.cfg.folder else win32.documents_dir() / "Gather"
         self.journal_dir = ui.Config.path().parent / "unsaved"
         self.journal_warned = False
         # one worker: exports run off the Tk thread, one at a time (no output-filename races)
@@ -40,7 +40,7 @@ class App:
                            on_move=lambda item_id, position: self.q.put(("move", item_id, position)))
         actions = {name: (lambda n=name: self.q.put((n,))) for name in
                    ("toggle", "undo", "cancel", "copy_text", "copy_path",
-                    "open_folder", "help", "quit", "autostart")}
+                    "open_folder", "save_folder", "help", "quit", "autostart")}
         actions["hotkey"] = lambda name: self.q.put(("hotkey_change", name))
         actions["mouse_trigger"] = lambda name: self.q.put(("mouse_trigger_change", name))
         self.tray = ui.Tray(self.cfg, actions)
@@ -163,6 +163,21 @@ class App:
     def on_open_folder(self) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
         os.startfile(self.folder)
+
+    def on_save_folder(self) -> None:
+        folder = ui.filedialog.askdirectory(parent=self.root, title="Choose Gather save folder",
+                                           initialdir=str(self.folder), mustexist=True)
+        if not folder:
+            return
+        previous = self.cfg.folder
+        self.cfg.folder = folder
+        try:
+            self.cfg.save()
+        except OSError:
+            self.cfg.folder = previous
+            raise
+        self.folder = Path(folder)
+        self.tray.notify("Gather", "Save folder changed. Applies to future exports.")
 
     def on_help(self) -> None:
         ui.show_help(self.root, self.cfg)

@@ -1,6 +1,9 @@
 # Gather independent review
 
-Reviewed `98da13e` (main), 2026-10-13, Windows 11 build 26300, 64-bit Python 3.12.7.
+Historical review of an early build. Findings and test counts below describe that
+build, not the current release. Consult current tests before treating a finding as open.
+
+Reviewed `98da13e` (main), 2026-10-13, Windows 11, Python 3.12.7.
 Read README and every file in `gather/`. Source unchanged; tests and this report are on
 `codex/review`. Suggested diffs below are sketches, **not applied**.
 

@@ -1,7 +1,4 @@
-"""Win32 layer (ctypes only, no pywin32).
-
-Owner: Wave 1 agent A. Signatures below are the contract; do not change them.
-"""
+"""Win32 clipboard, hotkeys and mouse hook (ctypes only, no pywin32)."""
 import ctypes
 import os
 import threading

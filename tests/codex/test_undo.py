@@ -26,6 +26,7 @@ def test_preview_text(text, expected):
     assert ui.preview_text(text) == expected
 
 
+@pytest.mark.desktop
 def test_repeated_undo_dedupe_empty_and_clipboard(tmp_path, monkeypatch):
     app = fake_app(tmp_path, monkeypatch)
     app.on_clip("two\nlines", "a.exe", "test", T)
@@ -145,6 +146,7 @@ def test_undo_works_on_resumed_failed_export(tmp_path, monkeypatch):
     assert [c.text for c in recovered.chunks] == ["unsaved synthetic copy"]
 
 
+@pytest.mark.desktop
 def test_undo_hotkey_lifetime_and_repeated_input(target):
     _, pump = target
     hits = []
@@ -192,6 +194,7 @@ def test_undo_registration_failure_keeps_recording_and_tray(tmp_path, monkeypatc
     assert len(app.session) == 0 and app.pill_state == "recording 0"
 
 
+@pytest.mark.desktop
 def test_actual_alt_z_conflict_keeps_clipboard_listener():
     ready, release = threading.Event(), threading.Event()
 
@@ -217,6 +220,7 @@ def test_actual_alt_z_conflict_keeps_clipboard_listener():
         thread.join(3)
 
 
+@pytest.mark.desktop
 def test_count_only_pill_focus_and_click_through(target):
     # A fresh interpreter avoids the local Anaconda repeated-Tk-init failure.
     subprocess.run([sys.executable, "-c", '''

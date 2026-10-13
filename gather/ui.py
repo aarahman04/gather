@@ -5,7 +5,7 @@ import math
 import os
 import threading
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 from time import monotonic
 import winreg
 import winsound
@@ -32,6 +32,7 @@ class Config:
     mask: bool = True
     hotkey: str = DEFAULT_HOTKEY  # a win32.HOTKEYS name
     mouse_trigger: str = DEFAULT_MOUSE_TRIGGER
+    folder: str = ""        # empty means the Windows Documents\Gather folder
 
     @staticmethod
     def path() -> Path:
@@ -52,6 +53,9 @@ class Config:
                 cfg.hotkey = d["hotkey"]
             if d.get("mouse_trigger") in MOUSE_TRIGGERS:
                 cfg.mouse_trigger = d["mouse_trigger"]
+            folder = d.get("folder")
+            if isinstance(folder, str) and "\0" not in folder and Path(folder).is_absolute():
+                cfg.folder = folder
         except Exception:
             pass
         return cfg
@@ -63,7 +67,8 @@ class Config:
             tmp = p.with_suffix(".json.tmp")
             tmp.write_text(json.dumps({"format": self.format, "mask": self.mask,
                                        "hotkey": self.hotkey,
-                                       "mouse_trigger": self.mouse_trigger}), encoding="utf-8")
+                                       "mouse_trigger": self.mouse_trigger,
+                                       "folder": self.folder}), encoding="utf-8")
             os.replace(tmp, p)
 
 
@@ -108,8 +113,9 @@ def show_help(root: tk.Tk, cfg: Config) -> None:
         "hold near the top or bottom to scroll. Click × to remove an item.\n\n"
         "4. Alt+Z removes the latest remaining copy, even after reordering. No redo.\n\n"
         f"5. Stop with {cfg.hotkey}{mouse}, or the tray icon. Your file is saved in "
-        "Documents\\Gather and put on the clipboard. Ctrl+V pastes or attaches it.\n\n"
-        "Right-click the tray for format, hotkey, mouse trigger and cancel options. "
+        "your save folder (Documents\\Gather by default) and put on the clipboard. "
+        "Ctrl+V pastes or attaches it.\n\n"
+        "Right-click the tray for Save folder, format, hotkey, mouse trigger and cancel options. "
         "List previews always mask recognized secrets.\n\n"
         "Middle-click mode replaces normal middle-click in other apps. "
         "Choose Alt + middle-click or Off to keep that behaviour.", parent=root)
@@ -197,6 +203,7 @@ class Tray:
             I("Copy last as text", self._act("copy_text")),
             I("Copy last file path", self._act("copy_path")),
             I("Open Gather folder", self._act("open_folder")),
+            I("Save folder…", self._act("save_folder")),
             M.SEPARATOR,
             I("Format", M(*[
                 I(label, fmt(f), checked=lambda i, f=f: self.cfg.format == f, radio=True)

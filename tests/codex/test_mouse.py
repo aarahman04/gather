@@ -142,6 +142,7 @@ def target():
     ("Middle-click", False, True), ("Middle-click", True, True),
     ("Alt + middle-click", False, False), ("Alt + middle-click", True, True),
 ])
+@pytest.mark.desktop
 def test_injected_modes(target, mode, with_alt, swallow):
     events, pump = target
     hits = []
@@ -172,6 +173,7 @@ def test_injected_modes(target, mode, with_alt, swallow):
     assert watcher._hwnd is None and watcher.mouse_trigger == "Off"
 
 
+@pytest.mark.desktop
 def test_setting_change_waits_for_consumed_release(target):
     events, pump = target
     hits, result = [], []
@@ -204,6 +206,7 @@ def test_setting_change_waits_for_consumed_release(target):
         watcher.stop()
 
 
+@pytest.mark.desktop
 def test_own_injected_mouse_input_passes_through(target):
     events, pump = target
     hits = []
@@ -229,6 +232,7 @@ def test_orphan_release_and_negative_hook_code_pass_through(monkeypatch):
 
 
 @pytest.mark.parametrize("initial", ["Off", "Middle-click"])
+@pytest.mark.desktop
 def test_install_failure_leaves_keyboard_and_tray_working(monkeypatch, initial):
     watcher = win32.ClipboardWatcher(lambda: None, lambda *a: None, mouse_trigger=initial)
     watcher.start()
@@ -242,6 +246,7 @@ def test_install_failure_leaves_keyboard_and_tray_working(monkeypatch, initial):
         watcher.stop()
 
 
+@pytest.mark.desktop
 def test_startup_hook_failure_and_cleanup(monkeypatch):
     monkeypatch.setattr(win32.user32, "SetWindowsHookExW", lambda *a: None)
     watcher = win32.ClipboardWatcher(lambda: None, lambda *a: None)
@@ -253,6 +258,7 @@ def test_startup_hook_failure_and_cleanup(monkeypatch):
     assert watcher._hwnd is None and watcher._mouse_hook is None
 
 
+@pytest.mark.desktop
 def test_stop_during_consumed_press_does_not_leave_a_hook(target):
     events, pump = target
     watcher = win32.ClipboardWatcher(lambda: None, lambda *a: None)
@@ -272,6 +278,7 @@ def test_stop_during_consumed_press_does_not_leave_a_hook(target):
     assert events == ["down", "up"]
 
 
+@pytest.mark.desktop
 def test_hooks_replaced_and_removed_on_the_watcher_thread(monkeypatch):
     calls = []
     install, remove = win32.user32.SetWindowsHookExW, win32.user32.UnhookWindowsHookEx
@@ -322,6 +329,7 @@ def test_mouse_callback_only_posts_and_failed_post_passes_through(monkeypatch):
     assert not watcher._mouse_swallowed
 
 
+@pytest.mark.desktop
 def test_locked_clipboard_does_not_stall_mouse_hook(target):
     events, pump = target
     hits, texts = threading.Event(), []

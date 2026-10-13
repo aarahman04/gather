@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-baseline/
+graphify-out/
 .pytest_cache/
 
 # Build output

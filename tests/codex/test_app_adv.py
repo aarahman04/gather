@@ -21,6 +21,7 @@ def fake_app(tmp_path, monkeypatch, recording=True):
     app = App.__new__(App)
     app.q = queue.Queue()
     app.cfg = SimpleNamespace(format="md", mask=True, hotkey="Alt+C", mouse_trigger="Middle-click",
+                              folder="",
                               save=lambda: setattr(app, "saved", app.cfg.hotkey))
     app.saved = None
     app.folder = tmp_path / "out"
@@ -59,6 +60,62 @@ def settle(app, timeout=30):
         assert time.monotonic() < deadline, "export never reported back"
         app.drain()
         time.sleep(0.01)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_save_folder_selection_persists_and_cancel_keeps_previous(tmp_path, monkeypatch, cancel):
+    app = fake_app(tmp_path, monkeypatch, recording=False)
+    previous = app.folder
+    selected = tmp_path / "chosen folder"
+    selected.mkdir()
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    app.cfg = ui.Config()
+    calls = []
+    def choose(**kwargs):
+        calls.append(kwargs)
+        return "" if cancel else str(selected)
+    monkeypatch.setattr(ui.filedialog, "askdirectory", choose)
+    app.on_save_folder()
+    assert calls == [{"parent": app.root, "title": "Choose Gather save folder",
+                      "initialdir": str(previous), "mustexist": True}]
+    assert app.folder == (previous if cancel else selected)
+    assert ui.Config.load().folder == ("" if cancel else str(selected))
+    if not cancel:
+        app.on_toggle()
+        app.on_clip("synthetic text", "test.exe", "source", T)
+        app.finish()
+        settle(app)
+        assert app.last_path.parent == selected
+        assert "synthetic text" in app.last_path.read_text(encoding="utf-8")
+
+
+def test_save_folder_preferences_failure_keeps_old_destination(tmp_path, monkeypatch):
+    app = fake_app(tmp_path, monkeypatch, recording=False)
+    previous = app.folder
+    app.cfg.folder = str(previous)
+    monkeypatch.setattr(ui.filedialog, "askdirectory", lambda **kwargs: str(tmp_path))
+    def denied():
+        raise PermissionError("synthetic config failure")
+    app.cfg.save = denied
+    with pytest.raises(PermissionError):
+        app.on_save_folder()
+    assert app.folder == previous and app.cfg.folder == str(previous)
+
+
+@pytest.mark.parametrize("custom", [False, True])
+def test_startup_uses_saved_folder_or_documents_default(tmp_path, monkeypatch, custom):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    selected = tmp_path / "chosen"
+    ui.Config(folder=str(selected) if custom else "").save()
+    monkeypatch.setattr("gather.__main__.tk.Tk", lambda: SimpleNamespace(withdraw=lambda: None))
+    monkeypatch.setattr(ui, "Pill", lambda *a, **k: None)
+    monkeypatch.setattr(ui, "Tray", lambda *a: None)
+    monkeypatch.setattr(win32, "ClipboardWatcher", lambda **k: None)
+    monkeypatch.setattr(win32, "documents_dir", lambda: tmp_path / "Documents")
+    app = App()
+    assert app.folder == (selected if custom else tmp_path / "Documents" / "Gather")
+    assert app.journal_dir == tmp_path / "Gather" / "unsaved"
+    app.exports.shutdown()
 
 
 def test_failed_export_retains_retryable_session(tmp_path, monkeypatch):
@@ -242,6 +299,7 @@ def test_journal_write_failure_keeps_recording(tmp_path, monkeypatch):
     assert "\nb\n" in app.last_path.read_text(encoding="utf-8")
 
 
+@pytest.mark.desktop
 def test_pill_saving():
     try:
         root = tk.Tk()

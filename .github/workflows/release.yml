@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12.7'
+          architecture: x64
+      - name: Check tag version
+        shell: pwsh
+        run: |
+          $version = python -c "from gather import __version__; print(__version__)"
+          if ($LASTEXITCODE -or $env:GITHUB_REF_NAME -ne "v$version") { throw 'Tag and version differ' }
+      - name: Build and test
+        shell: pwsh
+        run: .\build.ps1 -NoDesktop
+
+      # CODE SIGNING: add the approved signing step here, before checksumming.
+      # No signing credentials or signing step are configured yet.
+
+      - name: Checksum and publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $hash = (Get-FileHash dist\Gather.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Gather.exe" | Set-Content dist\Gather.exe.sha256 -Encoding ascii
+          gh release create $env:GITHUB_REF_NAME dist/Gather.exe dist/Gather.exe.sha256 dist/Gather-licenses.zip dist/Gather-dependency-sources.zip --verify-tag --latest --title "Gather $env:GITHUB_REF_NAME" --notes "Windows only. Download Gather.exe and double-click it. The EXE is unsigned. Verify it using Gather.exe.sha256; see the README for SmartScreen instructions. Licenses and LGPL dependency sources are included below."
+          if ($LASTEXITCODE) { throw 'Release publication failed' }

@@ -1,0 +1,47 @@
+[
+  {
+    "file": "pystray-0.19.5.tar.gz",
+    "url": "https://codeload.github.com/moses-palmer/pystray/tar.gz/refs/tags/v0.19.5",
+    "sha256": "2ab6bd15c14b400c9e8271a82c9de8adc0f1a0cacfc14080bdd4fb42bb88ec92"
+  },
+  {
+    "file": "fpdf2-2.8.1.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/e4/2f/bfd880dbad75fb1921fd9e6523b7c163ca6297f15585fb002a6f276aadd5/fpdf2-2.8.1.tar.gz",
+    "sha256": "8866161396f942c8f7e3f022c4afb5e671b4d044745d4ed13c5d2ccc16ae5091"
+  },
+  {
+    "file": "lxml-6.1.3.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/23/ad/28ecd7cb894d172f3c9c80a075eeeb2017ac62e3632cee05a5f9493547eb/lxml-6.1.3.tar.gz",
+    "sha256": "45222d94ddd511536f3b2f7d9deae3b2339b4ce0f075f1ca25703b07cad9dd21"
+  },
+  {
+    "file": "libiconv-1.19.tar.gz",
+    "url": "https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.19.tar.gz",
+    "sha256": "88dd96a8c0464eca144fc791ae60cd31cd8ee78321e67397e25fc095c4a19aa6"
+  },
+  {
+    "file": "libxml2-win-binaries-2026.10.05.tar.gz",
+    "url": "https://codeload.github.com/lxml/libxml2-win-binaries/tar.gz/refs/tags/2026.10.05",
+    "sha256": "5e1467d7505ec442b2040ca5c73c275b5387316613aa2f492c5c963ac93ab194"
+  },
+  {
+    "file": "libiconv-accac417318a3eef7402685a268cab8037e62ba1.tar.gz",
+    "url": "https://codeload.github.com/winlibs/libiconv/tar.gz/accac417318a3eef7402685a268cab8037e62ba1",
+    "sha256": "431cc47e65488b929bdeb3688b773209eeb9dfd39584b4eb21fb39172398b839"
+  },
+  {
+    "file": "libxml2-bb84678855e3407fc88180295c992f9c984e28e0.tar.gz",
+    "url": "https://codeload.github.com/winlibs/libxml2/tar.gz/bb84678855e3407fc88180295c992f9c984e28e0",
+    "sha256": "5182396205f97b183d34ab8dadd7693523c7d4e2137394aec02514a5a9a9dcf0"
+  },
+  {
+    "file": "libxslt-c0076eaa6e0d1f99e01107e8db225a308eb1e543.tar.gz",
+    "url": "https://codeload.github.com/winlibs/libxslt/tar.gz/c0076eaa6e0d1f99e01107e8db225a308eb1e543",
+    "sha256": "d687aaf48527e042d942dccbc74fbcd150588522305e63d3e91785d9b6590677"
+  },
+  {
+    "file": "zlib-0089522e62e6b5d4950e62bd20f0cb06a9288413.tar.gz",
+    "url": "https://codeload.github.com/winlibs/zlib/tar.gz/0089522e62e6b5d4950e62bd20f0cb06a9288413",
+    "sha256": "e2af9f28fcdf723e464b40af73fdeed07ce3e581a9ea110702c1ba733983f8a0"
+  }
+]

@@ -2,11 +2,29 @@
 import ctypes
 import time
 
+import pytest
+
 from gather import win32
 
 
 _saved = None
 _saved_ok = False
+
+
+def pytest_addoption(parser):
+    parser.addoption("--no-desktop", action="store_true",
+                     help="Skip tests requiring an interactive Windows desktop")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "desktop: requires an interactive Windows desktop")
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--no-desktop"):
+        for item in items:
+            if item.get_closest_marker("desktop"):
+                item.add_marker(pytest.mark.skip(reason="requires an interactive Windows desktop"))
 
 
 def foreground():
@@ -44,6 +62,8 @@ def pytest_sessionstart(session):
     from exe_check import gather_processes
     if gather_processes():
         raise RuntimeError("Quit the existing Gather instance before live tests")
+    if session.config.getoption("--no-desktop"):
+        return
     _saved = win32._get_clipboard_text()
     _saved_ok = True
     original = win32.user32.keybd_event
