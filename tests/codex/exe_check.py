@@ -217,17 +217,18 @@ def main():
             time.sleep(2.1)  # stable collapsed pill after the temporary undo preview
             screenshot(pid, "pill")
             button = rectangle(overlay("Gather expand", pid))
-            click_point((button[0] + button[2]) // 2, (button[1] + button[3]) // 2, pump)
+            click_point((button[0] + button[2]) // 2, (button[1] + button[3]) // 2, pump, pid)
             panel_hwnd = overlay("Gather items", pid)
             wait_for(lambda: win32.user32.IsWindowVisible(panel_hwnd))
             time.sleep(0.2)
             screenshot(pid, "panel-3", True)
             rect = rectangle(panel_hwnd)
             row_height = (rect[3] - rect[1]) // 3
-            click_point(rect[2] - 20, rect[1] + row_height * 3 // 2, pump)
+            click_point(rect[2] - 20, rect[1] + row_height * 3 // 2, pump, pid)
             wait_for(lambda: rectangle(panel_hwnd)[3] - rectangle(panel_hwnd)[1] == row_height * 2)
+            rect = rectangle(panel_hwnd)
             drag_points((rect[0] + 15, rect[1] + row_height * 3 // 2),
-                        (rect[0] + 15, rect[1] + 2), pump)
+                        (rect[0] + 15, rect[1] + 2), pump, pid)
             time.sleep(0.2)
             assert win32.user32.GetForegroundWindow() == source and win32.user32.GetFocus() == source_focus
             assert win32._get_clipboard_text() == wrong, "Panel edits touched the clipboard"
@@ -257,7 +258,7 @@ def main():
                 time.sleep(0.15)
                 if i == 0:
                     button = rectangle(overlay("Gather expand", pid))
-                    click_point((button[0] + button[2]) // 2, (button[1] + button[3]) // 2, pump)
+                    click_point((button[0] + button[2]) // 2, (button[1] + button[3]) // 2, pump, pid)
             screenshot(pid, "panel-10", True)
             send(middle(), middle(True))
             pump()

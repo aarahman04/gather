@@ -279,6 +279,17 @@ def preview_text(text: str, limit: int = 40) -> str:
     return head + ("…" if len(text) > limit else "")
 
 
+def _fit_text(label: tk.Label, text: str) -> None:
+    """Fit already masked text to the actual pixel width, including wide glyphs."""
+    shown, body = text, text.removesuffix("…")
+    available = label.winfo_width() - 4
+    if available > 0:
+        while body and int(label.tk.call("font", "measure", label.cget("font"), shown)) > available:
+            body = body[:-1]
+            shown = body + "…"
+    label.config(text=shown)
+
+
 class Pill:
     """Click-through body, separate clickable chevron and item panel; all never activate.
     Only edit callbacks enqueue work; widgets and list updates live on the Tk thread."""
@@ -310,6 +321,7 @@ class Pill:
                                 highlightthickness=0, takefocus=False, font=("Segoe UI", 12))
         self.chevron.pack(fill="both", expand=True)
         self.panel, self.panel_hwnd = _overlay(root, "Gather items")
+        self.panel.attributes("-alpha", 1.0)
         self.scale = float(root.tk.call("tk", "scaling")) * 72 / 96
         self.row_height = round(52 * self.scale)
         self.canvas = tk.Canvas(self.panel, bg=self.BG, highlightthickness=0,
@@ -367,11 +379,13 @@ class Pill:
             if chunk.id not in self.rows:
                 self.rows[chunk.id] = self._row(chunk)
             row = self.rows[chunk.id]
-            row["number"].config(text=str(i))
-            row["preview"].config(text=preview_text(chunk.text, 60))
+            row["number"].config(text=str(i), width=max(3, len(str(len(self.items)))))
+            row["short_preview"] = preview_text(chunk.text, 60)
+            _fit_text(row["preview"], row["short_preview"])
             app = chunk.app[:-4] if chunk.app.lower().endswith(".exe") else chunk.app
             source = " · ".join(filter(None, (preview_text(app, 14), preview_text(chunk.title, 28)))) or "unknown"
-            row["source"].config(text=source)
+            row["short_source"] = source
+            _fit_text(row["source"], source)
             row["time"].config(text=chunk.ts.strftime("%H:%M:%S"))
             row["frame"].pack(fill="x")
         if not self.items:
@@ -409,8 +423,12 @@ class Pill:
         handle.bind("<ButtonPress-1>", lambda e: self._drag_start(e, chunk.id))
         handle.bind("<B1-Motion>", self._drag_motion)
         handle.bind("<ButtonRelease-1>", self._drag_end)
-        return dict(frame=row, handle=handle, number=number, cross=cross,
-                    preview=preview, source=source, time=clock)
+        widgets = dict(frame=row, handle=handle, number=number, cross=cross,
+                       preview=preview, source=source, time=clock,
+                       short_preview="", short_source="")
+        preview.bind("<Configure>", lambda e: _fit_text(preview, widgets["short_preview"]))
+        source.bind("<Configure>", lambda e: _fit_text(source, widgets["short_source"]))
+        return widgets
 
     def _remove(self, item_id: str) -> None:
         if self.recording and self.expanded:
@@ -468,7 +486,7 @@ class Pill:
         self.chevron_win.geometry(f"{button}x{height}+{x + body}+{y}")
         if self.expanded:
             width = min(round(420 * self.scale), r.right - r.left - 12)
-            panel_x = max(r.left + 6, min(x, r.right - width - 6))
+            panel_x = (r.left + r.right - width) // 2
             panel_y = y + height + 4
             panel_h = min(max(1, min(8, len(self.items))) * self.row_height, r.bottom - panel_y - 6)
             self.panel.geometry(f"{width}x{max(1, panel_h)}+{panel_x}+{panel_y}")

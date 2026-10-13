@@ -1,6 +1,7 @@
 """Ordered items, durable edits and a clickable overlay that leaves the source focused."""
 import ctypes
 import json
+import os
 import subprocess
 import sys
 import tkinter as tk
@@ -261,19 +262,21 @@ def panel_app(tmp_path, monkeypatch, target, tk_root):
             window.destroy()
 
 
-def click_point(x, y, pump):
+def click_point(x, y, pump, receiver_pid=None):
     hwnd = foreground()
     assert win32.user32.SetCursorPos(x, y)
     assert win32.user32.GetForegroundWindow() == hwnd
+    assert win32._window_pid(win32.user32.WindowFromPoint(w.POINT(x, y))) in {os.getpid(), receiver_pid}, "Pointer outside owned test windows"
     inputs = (INPUT * 2)(INPUT(type=0, mi=MOUSEINPUT(dwFlags=2)), INPUT(type=0, mi=MOUSEINPUT(dwFlags=4)))
     assert win32.user32.SendInput(2, inputs, ctypes.sizeof(INPUT)) == 2
     pump()
     assert win32.user32.GetForegroundWindow() == hwnd
 
 
-def drag_points(start, finish, pump):
+def drag_points(start, finish, pump, receiver_pid=None):
     hwnd = foreground()
     assert win32.user32.SetCursorPos(*start)
+    assert win32._window_pid(win32.user32.WindowFromPoint(w.POINT(*start))) in {os.getpid(), receiver_pid}, "Pointer outside owned test windows"
     down = INPUT(type=0, mi=MOUSEINPUT(dwFlags=2))
     up = INPUT(type=0, mi=MOUSEINPUT(dwFlags=4))
     assert win32.user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT)) == 1
@@ -281,6 +284,7 @@ def drag_points(start, finish, pump):
         pump()
         assert foreground() == hwnd
         assert win32.user32.SetCursorPos(*finish)
+        assert win32._window_pid(win32.user32.WindowFromPoint(w.POINT(*finish))) in {os.getpid(), receiver_pid}, "Drop outside owned test windows"
         pump()
     finally:
         assert win32.user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT)) == 1
@@ -407,6 +411,21 @@ def test_simulated_widget_drag_marker_reorders_and_alt_z_uses_capture_order(pane
     assert [pill.rows[c.id]["number"].cget("text") for c in app.session.chunks] == ["1", "2", "3"]
     app.on_undo(); app.root.update()
     assert texts(app.session) == ["first", "middle"] and len(pill.rows) == 2
+
+
+@pytest.mark.parametrize("text", ["W" * 60, "界" * 60])
+def test_wide_preview_fits_with_ellipsis_and_panel_does_not_jump(panel_app, text):
+    app, pill = panel_app, panel_app.pill
+    pill.chevron.invoke(); app.root.update()
+    x = pill.panel.winfo_x()
+    app.on_clip(text, "test.exe", "界" * 60, T); app.root.update()
+    row = pill.rows[app.session.latest().id]
+    for field in ("preview", "source"):
+        label = row[field]
+        shown = label.cget("text")
+        assert shown.endswith("…")
+        assert int(label.tk.call("font", "measure", label.cget("font"), shown)) <= label.winfo_width() - 4
+    assert pill.panel.winfo_x() == x
 
 
 def test_scroll_many_items_and_collapse_on_saving_stop_cancel(panel_app):
