@@ -1,160 +1,133 @@
 # Gather
 
-Copy as many things as you like, from any app, then paste them all as **one file**.
+Gather collects text you copy from any app into one file on your clipboard.
 
-**Click your mouse wheel** (middle-click), then copy from your browser, terminal,
-editor, chat, anything. Middle-click again. Gather writes everything into one Markdown file and puts
-that *file* on your clipboard, so **Ctrl+V** in a folder, an editor or a chat's upload
-box pastes the file itself.
+**Windows only.** Tested on Windows 11, x64. Windows 10 is untested.
 
-Built for moving AI-agent output between tools without the copy → notebook → save →
-upload routine.
+Press **Alt+C** to start, then copy text from your browser, editor, chat or terminal.
+Press Alt+C again to save the collected text as one file and put that file on the
+clipboard. Paste it into a folder or an app that accepts file attachments, without
+assembling the copies in a separate document.
+
+![Recording pill showing three collected items](docs/images/pill.png)
+
+![Expanded list with synthetic copied text](docs/images/items.png)
+
+![Reordering collected items by dragging](docs/images/drag.gif)
+
+![Gather tray menu](docs/images/tray-menu.png)
 
 ## Install
 
-1. Download `Gather.exe` from the [latest release](https://github.com/aarahman04/gather/releases/latest).
-2. Put it anywhere (e.g. `C:\Tools\Gather.exe`) and double-click it. Nothing is installed.
-3. Optional: right-click the tray icon → **Start with Windows**.
+1. Download **[Gather.exe from the latest release](https://github.com/aarahman04/gather/releases/latest)**.
+2. Double-click it. There is no installer and no administrator access is required.
+3. Look for the grey Gather icon in the tray, possibly under the hidden-icons arrow.
+   Right-click it for settings; **Start with Windows** is optional.
 
-**SmartScreen:** Gather is not code-signed, so the first launch of a downloaded copy may
-show "Windows protected your PC". Click **More info → Run anyway**. Windows Defender
-reports no threats on the release build.
-Security software may also flag programs that use global mouse hooks.
+## Windows SmartScreen warning
 
-Windows 11 hides new tray icons under the **^** arrow. Drag the Gather icon onto the
-taskbar if you want it always visible. You don't need it, though: a small red
-**● Gather N** pill shows at the top of the screen whenever it's recording.
+Gather.exe is **not code-signed yet**. Windows may show **Windows protected your PC**
+or **Unknown publisher**. After checking the download, choose **More info**, then
+**Run anyway**, if that option is available. Code signing is being pursued.
 
-## Use
-
-| | |
-|---|---|
-| Start / stop recording | **Middle-click** (default), **Alt+C**, or left-click the tray icon |
-| While recording | every text copy is collected; the pill shows just the item count |
-| Remove a wrong copy | **Alt+Z**, or tray → **Remove last item (Alt+Z)**; repeat to remove earlier items |
-| See and arrange all copies | click the pill's **arrow**; drag a left handle to reorder, or click a row's **×** to remove it |
-| Learn how to use Gather | right-click the tray icon → **Help** |
-| After stopping | the file is on your clipboard. Press **Ctrl+V** wherever you want it |
-| While saving | the pill shows a grey **Saving…** (large PDFs take a few seconds); you can start a new session meanwhile |
-
-You always know the state: grey round tray icon = idle; red square icon, the pill
-at the top of the screen, and a short sound = recording. A notification names the file
-when you stop.
-
-The pill stays at **● Gather N**, without flashing copied text or undo previews.
-It does not take focus, and clicks pass through its body. Copied text is visible
-only in the expanded list, where previews always mask recognized secrets, even
-when export masking is switched off. An empty undo shows a notification.
-
-Click the pill's **down arrow** to see every collected item in a wider dark panel;
-the **up arrow** collapses it. Each row shows its position, a short masked preview, source app
-and window title, and capture time. Drag the **⋮⋮** handle on the left to move an
-item; the whole row follows your mouse, neighbouring rows slide out of its way,
-and a bright line marks where it will land. Hold near the top or bottom of the
-list to scroll while dragging. Drop outside the list horizontally to cancel a
-move. Rows slide smoothly into place, and the arrow/panel ease open and closed
-(following Windows' animation setting). New copies do not interrupt your drag.
-Click **×** on the right to remove it
-immediately. There is no redo. The list updates as you copy and scrolls with the
-mouse wheel when there are more than eight items. Panel clicks and drags never
-take focus from the app you are copying from, and do not toggle recording.
-The panel closes on stop, saving or cancellation; the file uses the order at stop.
-Panel previews and source titles always mask recognized secrets, even with
-**Mask secrets** off. Removing and moving items is recorded before changing the
-list; if the backup write fails, the edit is kept unchanged and Gather tells you.
-
-**Alt+Z belongs to Gather only while recording.** It removes the most recently
-captured item still present, even after dragging it to another position,
-without changing your clipboard; there is no redo. If another app owns Alt+Z, Gather
-notifies you and the tray action still works. Undo is recorded in the crash journal,
-so recovery does not restore removed items. Copying a removed item again collects it
-again, and undo also works if a failed save resumes recording. If the undo record
-cannot be written, Gather keeps the item and tells you to retry.
-
-**The default replaces normal middle-click in every app:** opening links in new tabs,
-closing tabs and autoscroll will stop working while Gather is running. This is intentional.
-To keep those actions, choose tray → **Mouse trigger → Alt + middle-click**;
-plain middle-click then works normally. Choose **Off** to remove the mouse hook entirely.
-Gather consumes the trigger's press and release and toggles once on the press.
-For Alt + middle-click, it sends an unassigned key (VK_E8) to prevent releasing Alt
-from activating the app's menu bar; it does not release your Alt key.
-
-**Where paste works**
-
-- **File Explorer / desktop:** creates the file.
-- **Browser chats (claude.ai, ChatGPT, …):** attaches the file.
-- **Editors** that accept dropped files (e.g. VS Code explorer): add the file.
-- **Windows Terminal:** pastes the file's full path. For the text itself, use tray →
-  **Copy last as text**.
-
-**Copying from terminals.** Gather collects whatever lands on the clipboard. The pill count
-goes up on every capture, so if it doesn't move, the terminal didn't copy. Tested on
-Windows 11:
-
-- **Windows Terminal:** select with the mouse, then **Ctrl+C**, **Ctrl+Shift+C** or
-  right-click. Ctrl+C copies only while the selection is still highlighted. If the
-  highlight is gone (for example because output kept scrolling), Ctrl+C goes to the
-  running program, and in Claude Code or a shell that means *interrupt*, not copy.
-- **Claude Code:** when Claude Code handles the mouse itself, just selecting text copies
-  it (you'll see "Copied N characters"); don't press Ctrl+C afterwards. To use Windows
-  Terminal's own selection instead, hold **Shift** while dragging, then press Ctrl+Shift+C.
-- **PowerShell in the classic console window** (not Windows Terminal): Ctrl+A and
-  Ctrl+C act on the command line only. Select with the mouse and press **Enter** or
-  right-click.
-- **cmd:** select with the mouse (or Ctrl+A), then **Enter** or Ctrl+C.
-
-**Tray menu**
-
-- *Remove last item (Alt+Z)* / *Cancel session* (while recording)
-- *Copy last as text*: the last session as plain Markdown text
-- *Copy last file path*
-- *Open Gather folder*: every session is saved in `Documents\Gather`, which doubles as your history
-- *Format*: Markdown (default), Word, or PDF
-- *Hotkey*: Alt+C (default), Win+Y, Pause, Scroll Lock, or Ctrl+Alt+G. Changes apply immediately and are saved in your config. If a key is taken by another app, Gather says so and keeps the previous working key; left-clicking the tray still works
-- *Mouse trigger*: Middle-click (default; replaces normal middle-click), Alt + middle-click, or Off. Changes apply immediately and are saved. A change during a held trigger waits for its release; if it stays held, retry after releasing it. If the hook cannot be installed, Gather switches this setting to Off and notifies you; keyboard and tray toggles keep working
-- *Mask secrets* (on by default): replaces things that are almost certainly API keys
-  (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `AIza…`, private-key blocks) with `[masked]`,
-  in the copied text and in window titles
-- *Start with Windows*, *Quit*
-- *Help*: a short offline guide to recording, arranging copies and pasting the file
-
-**What goes in the file**
-
-```markdown
-# Gather — 2026-10-13 14:30–14:45 · 3 items
-
-## 1 · chrome — Claude · 14:31
-
-<what you copied, verbatim>
-
----
-
-## 2 · WindowsTerminal — pwsh · 14:33
-...
-```
-
-Gather keeps the copied text exactly as it was copied. The file follows the panel's
-order, with position numbers and each item's original source and time. It skips a
-copy that is the same as the most recently captured item still present (apps often
-fire twice), ignores non-text copies (images, files),
-and ignores copies that password managers mark as private. Settings live in
-`%APPDATA%\Gather\config.json`.
-
-**Nothing gets lost.** While recording, each copy is also appended to a small file in
-`%APPDATA%\Gather\unsaved\` (raw, unmasked text, deleted once the session's file is saved).
-If Gather crashes or is killed, the next start saves that session to `Documents\Gather`
-and tells you (it doesn't touch your clipboard). If saving fails (disk full, folder locked),
-Gather keeps recording the same session: fix the cause or switch format, then stop again.
-
-## Run from source / build
+Download `Gather.exe.sha256` from the same release and compare it with:
 
 ```powershell
-git clone https://github.com/aarahman04/gather.git; cd gather
-python -m venv .venv; .\.venv\Scripts\pip install -r requirements-dev.txt
-.\.venv\Scripts\pythonw -m gather          # run
-.\.venv\Scripts\python -m pytest -q        # tests send keyboard/mouse input and use the clipboard
-.\build.ps1                                 # -> dist\Gather.exe
+Get-FileHash .\Gather.exe -Algorithm SHA256
 ```
 
-Python 3.12, Windows 10/11. Code: `gather/win32.py` (clipboard, hotkey, mouse hook; ctypes only),
-`session.py`, `writers.py`, `ui.py` (tray, pill), `__main__.py` (wiring).
+The hash must match the value in the checksum file. This confirms which file you
+downloaded; it does not guarantee that software is safe. The code is open, and
+[the release workflow](.github/workflows/release.yml) builds the EXE with GitHub
+Actions from the tagged code in this repository. You can also
+[build from source](#build-from-source).
+
+## Usage
+
+| Action | Hotkey or trigger |
+|---|---|
+| Start / stop | **Alt+C**, **middle-click**, or left-click the tray icon |
+| Undo the latest remaining copy | **Alt+Z** while recording, or **Remove last item** in the tray; no redo |
+| View or arrange items | Click the pill's arrow; drag a left handle to reorder, or click **×** to remove |
+| Change the keyboard trigger | Tray → **Hotkey**: Alt+C, Win+Y, Pause, Scroll Lock or Ctrl+Alt+G |
+| Change the mouse trigger | Tray → **Mouse trigger**: Middle-click, Alt + middle-click or Off |
+| Choose where exports go | Tray → **Save folder…**; selection is remembered |
+| Discard the current session | Tray → **Cancel session** |
+
+Choose **Markdown (.md)**, **Word (.docx)** or **PDF (.pdf)** under **Format**.
+Files default to your Windows **Documents\Gather** folder. Use **Save folder…** to
+choose another folder; it applies to future exports. **Open Gather folder**
+opens it. Each item includes its source app, window title and capture time.
+Non-text copies and consecutive duplicates are ignored.
+
+After stopping, **Ctrl+V** pastes the file into Explorer or attaches it in apps
+that accept clipboard files. Terminals generally paste its path instead;
+**Copy last as text** copies the collected text. Large exports show **Saving…**.
+
+## Privacy
+
+Gather runs locally, keeps collected text on your machine, and writes files to
+your chosen save folder. It records copied text, source app, window title and time.
+Gather makes no network connections for text collection or exports to a local
+folder; checked on Windows 11 with Markdown, Word and PDF sessions.
+**Mask secrets** is on by default, but only recognizes certain key patterns;
+check exported files before sharing them. List previews always mask recognized keys.
+
+Settings are in `%APPDATA%\Gather\config.json`. During recording, the crash-recovery
+journal in `%APPDATA%\Gather\unsaved` stores **raw, unmasked text and metadata**,
+including copies subsequently removed from the list. Journals are deleted after
+a successful export or cancellation; after a crash or failed save, they remain
+until recovery succeeds. There is no time-based expiry. To discard them, quit
+Gather and delete that folder. Saved exports remain until you delete them.
+If your save folder or AppData is synced, redirected or on a network share, Windows
+or your storage provider may transfer those files elsewhere.
+
+## Troubleshooting
+
+- **Hotkey already in use:** pick another under **Hotkey**, or left-click the tray.
+- **Middle-click changed:** the default replaces normal middle-click throughout
+  Windows. Choose **Alt + middle-click** or **Off** under **Mouse trigger** to
+  restore normal middle-click behavior.
+- **Terminal text is not collected:** in Windows Terminal, select text then use
+  **Ctrl+Shift+C** or right-click. In Claude Code's own mouse-selection mode,
+  selection copies automatically; hold **Shift** while dragging to use the
+  terminal's selection instead. In classic PowerShell or cmd, select text then
+  press **Enter**. Ctrl+C without a selection may interrupt the running program.
+- **Antivirus alert:** unsigned utilities with global input hooks can be flagged.
+  Verify the release hash and report the detection with your Gather version.
+  If you are unsure, leave it blocked or build from source. Do not disable protection.
+
+## Build from source
+
+Use **Python 3.12.7, x64**, on Windows. Quit any running Gather instance first;
+the full tests use the clipboard and send keyboard/mouse input. They restore
+clipboard text, but do not preserve images, file lists or other clipboard formats.
+Keep the mouse and keyboard idle during desktop tests.
+
+```powershell
+git clone https://github.com/aarahman04/gather.git
+cd gather
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements-dev.txt
+.\.venv\Scripts\pythonw -m gather
+```
+
+Quit Gather, then test and build:
+
+```powershell
+.\.venv\Scripts\python -m pytest -q
+.\build.ps1
+```
+
+The build script also runs tests and produces `dist\Gather.exe`. Without an
+interactive desktop, use `pytest -q --no-desktop` (with the venv Python) and
+`build.ps1 -NoDesktop`. [Development notes](docs/development/README.md) describe
+the skipped tests. Dependencies and LGPL source downloads are pinned in the repo.
+
+## License and bugs
+
+Gather is [MIT licensed](LICENSE). Bundled libraries retain their own
+[licenses and replacement instructions](THIRD_PARTY_NOTICES.md).
+[Report bugs](https://github.com/aarahman04/gather/issues/new/choose) with your
+Gather version, Windows version, source app or terminal, and steps to reproduce.
+For vulnerabilities, use [private security reporting](SECURITY.md).
