@@ -97,7 +97,7 @@ app.session.add('kept', 'test.exe', 'test')
 app.session.add('removed', 'test.exe', 'test')
 app.journal = Journal.create(Path(sys.argv[1]), app.session)
 app.tray = SimpleNamespace(set_recording=lambda *a: None)
-app.pill = SimpleNamespace(update=lambda *a: None)
+app.pill = SimpleNamespace(update=lambda *a: None, set_items=lambda *a: None)
 app.on_undo()
 os._exit(23)
 """
@@ -113,7 +113,7 @@ def test_journal_undo_failure_keeps_the_item_and_retry_is_replayable(tmp_path, m
     app.on_clip("wrong", "a.exe", "test", T)
     original = app.journal.undo
 
-    def partially_failed_write():
+    def partially_failed_write(*args):
         with app.journal.path.open("a", encoding="utf-8") as file:
             file.write('{"undo":')
         raise OSError("synthetic partial disk write")

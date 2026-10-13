@@ -35,7 +35,9 @@ class App:
 
         self.root = tk.Tk()
         self.root.withdraw()
-        self.pill = ui.Pill(self.root)
+        self.pill = ui.Pill(self.root,
+                           on_remove=lambda item_id: self.q.put(("remove", item_id)),
+                           on_move=lambda item_id, position: self.q.put(("move", item_id, position)))
         actions = {name: (lambda n=name: self.q.put((n,))) for name in
                    ("toggle", "undo", "cancel", "copy_text", "copy_path",
                     "open_folder", "quit", "autostart")}
@@ -88,6 +90,7 @@ class App:
             self.journal = self.new_journal(self.session)
             self.start_capturing()
             self.tray.set_recording(True, 0)
+            self.pill.set_items(self.session.chunks)
             self.pill.show(0)
             ui.play("start")
         else:
@@ -104,14 +107,40 @@ class App:
         if not self.session.chunks:
             return self.refresh("Nothing to undo")
         # Persist first: a crash immediately after popping must not resurrect this item.
-        if self.journal is not None:
-            try:
-                self.journal.undo()
-            except OSError as e:
-                self.journal_error(e)
-                return self.tray.notify("Gather", "Couldn't save the undo record. Item kept; try again.")
+        if not self.persist_edit("undo", self.session.latest().id):
+            return
         removed = self.session.undo()
         self.refresh(f"Removed: {ui.preview_text(removed.text)}")
+
+    def on_remove(self, item_id: str) -> None:
+        if self.session is None or (chunk := self.session.get(item_id)) is None:
+            return
+        if not self.persist_edit("remove", item_id):
+            return
+        self.session.remove(item_id)
+        self.refresh(f"Removed: {ui.preview_text(chunk.text)}")
+
+    def on_move(self, item_id: str, position: int) -> None:
+        if self.session is None or (chunk := self.session.get(item_id)) is None:
+            return
+        if type(position) is not int or not 0 <= position < len(self.session):
+            return
+        if self.session.chunks.index(chunk) == position:
+            return
+        if not self.persist_edit("move", item_id, position):
+            return
+        self.session.move(item_id, position)
+        self.refresh()
+
+    def persist_edit(self, op: str, *args) -> bool:
+        try:
+            if self.journal is None:
+                self.journal = Journal.create(self.journal_dir, self.session)
+            getattr(self.journal, op)(*args)
+        except OSError:
+            self.tray.notify("Gather", "Couldn't save the edit record. Item kept; order unchanged. Try again.")
+            return False
+        return True
 
     def on_cancel(self) -> None:
         if self.session is not None:
@@ -219,6 +248,7 @@ class App:
                 self.session, self.journal = session, journal or self.new_journal(session)
                 self.start_capturing()
                 self.tray.set_recording(True, len(session))
+                self.pill.set_items(session.chunks)
                 self.pill.show(len(session))
                 retry = (f"press {self.watcher.hotkey} or click the tray icon"
                          if self.watcher.hotkey else "click the tray icon")
@@ -249,6 +279,7 @@ class App:
     def refresh(self, message: str = "") -> None:
         n = len(self.session)
         self.tray.set_recording(True, n)
+        self.pill.set_items(self.session.chunks)
         self.pill.update(n, message)
 
     def show_pill(self) -> None:
@@ -256,7 +287,8 @@ class App:
             self.pill.saving() if self.pending else self.pill.hide()
 
     def end_recording(self) -> tuple[Session, Journal | None]:
-        session, journal, self.session, self.journal = self.session, self.journal, None, None
+        session, journal = self.session.snapshot(), self.journal
+        self.session = self.journal = None
         self.watcher.set_capturing(False)
         self.tray.set_recording(False)
         self.show_pill()
@@ -274,7 +306,7 @@ class App:
         """Write on the worker thread; the result comes back through self.q."""
         # F6: snapshot settings now; the tray may change cfg while the worker runs
         fmt, mask, folder = self.cfg.format, self.cfg.mask, self.folder
-        ended = session.chunks[-1].ts if recovery else datetime.now()
+        ended = session.latest().ts if recovery else datetime.now()
 
         def work() -> None:
             try:

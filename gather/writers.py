@@ -11,7 +11,7 @@ _ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")  # XML-illega
 
 
 def _end(session: Session, ended: datetime | None) -> datetime:
-    return ended or (session.chunks[-1].ts if session.chunks else datetime.now())
+    return ended or (session.latest().ts if session.chunks else datetime.now())
 
 
 def _header(session: Session, ended: datetime) -> str:

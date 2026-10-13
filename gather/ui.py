@@ -140,7 +140,7 @@ class Tray:
         hint = " / ".join(triggers) or "tray click"
         if self.recording:
             undo = "Alt+Z undo" if self.undo_ok else "tray undo"
-            return f"Gather — recording · {self.count} item{'' if self.count == 1 else 's'} ({hint} to stop; {undo})"
+            return f"Gather — recording · {self.count} item{'' if self.count == 1 else 's'} ({hint} to stop; {undo}; ⌄ items)"
         return f"Gather — idle ({hint} to start)"
 
     def _hotkey(self) -> str:
@@ -227,35 +227,69 @@ _user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
 _user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
 _user32.GetParent.restype = wintypes.HWND
 _user32.GetParent.argtypes = [wintypes.HWND]
+_user32.SystemParametersInfoW.restype = wintypes.BOOL
+_user32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, ctypes.c_void_p, wintypes.UINT]
+_comctl32 = ctypes.WinDLL("comctl32", use_last_error=True)
+_SUBCLASSPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
+                                  ctypes.c_size_t, ctypes.c_ssize_t, ctypes.c_size_t, ctypes.c_size_t)
+_comctl32.SetWindowSubclass.restype = wintypes.BOOL
+_comctl32.SetWindowSubclass.argtypes = [wintypes.HWND, _SUBCLASSPROC, ctypes.c_size_t, ctypes.c_size_t]
+_comctl32.RemoveWindowSubclass.restype = wintypes.BOOL
+_comctl32.RemoveWindowSubclass.argtypes = [wintypes.HWND, _SUBCLASSPROC, ctypes.c_size_t]
+_comctl32.DefSubclassProc.restype = ctypes.c_ssize_t
+_comctl32.DefSubclassProc.argtypes = [wintypes.HWND, wintypes.UINT, ctypes.c_size_t, ctypes.c_ssize_t]
 
 
-def preview_text(text: str) -> str:
+@_SUBCLASSPROC
+def _noactivate(hwnd, msg, wp, lp, subclass_id, data):
+    if msg == 0x21:  # WM_MOUSEACTIVATE: accept the click without activating
+        return 3  # MA_NOACTIVATE
+    if msg == 0x82:  # WM_NCDESTROY: remove before Tk destroys its native window
+        _comctl32.RemoveWindowSubclass(hwnd, _noactivate, subclass_id)
+    return _comctl32.DefSubclassProc(hwnd, msg, wp, lp)
+
+
+def _overlay(root: tk.Tk, title: str, click_through: bool = False) -> tuple[tk.Toplevel, int]:
+    w = tk.Toplevel(root, bg=Pill.BG, takefocus=False)
+    w.title(title)
+    w.overrideredirect(True)
+    w.attributes("-topmost", True)
+    w.attributes("-alpha", 0.92)
+    w.geometry("+-10000+0")
+    w.update_idletasks()
+    inner = w.winfo_id()
+    hwnd = _user32.GetParent(inner) or inner
+    ex = _user32.GetWindowLongPtrW(hwnd, _GWL_EXSTYLE)
+    ex |= _WS_EX_NOACTIVATE | _WS_EX_TOOLWINDOW | _WS_EX_LAYERED
+    if click_through:
+        ex |= _WS_EX_TRANSPARENT
+    _user32.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE, ex)
+    for handle in {hwnd, inner}:
+        if not _comctl32.SetWindowSubclass(handle, _noactivate, 1, 0):
+            w.destroy()
+            raise ctypes.WinError(ctypes.get_last_error())
+    w.withdraw()
+    return w, hwnd
+
+
+def preview_text(text: str, limit: int = 40) -> str:
     """Always mask before shortening; previews never expose recognized secrets."""
     text = " ".join(mask_secrets(text).splitlines())
-    head = "".join(c if c.isprintable() else " " for c in text[:40])
-    return head + ("…" if len(text) > 40 else "")
+    head = "".join(c if c.isprintable() else " " for c in text[:limit])
+    return head + ("…" if len(text) > limit else "")
 
 
 class Pill:
-    """Small always-on-top, no-focus, click-through overlay at top-center (top-right would cover window buttons):
-    '● Gather 4'. Lives on the Tk main thread."""
+    """Click-through body, separate clickable chevron and item panel; all never activate.
+    Only edit callbacks enqueue work; widgets and list updates live on the Tk thread."""
 
     BG, FLASH = "#1e1e1e", "#4a4a4a"
 
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, on_remove=lambda item_id: None,
+                 on_move=lambda item_id, position: None) -> None:
         self.root = root
-        self.win = w = tk.Toplevel(root)
-        w.overrideredirect(True)
-        w.attributes("-topmost", True)
-        w.attributes("-alpha", 0.92)
-        w.configure(bg=self.BG)
-        w.geometry("+-10000+0")  # mapped off-screen just long enough to style the real HWND
-        w.update_idletasks()
-        # winfo_id is Tk's inner child HWND; the real top-level (the one that can take focus) is its parent.
-        self.hwnd = _user32.GetParent(w.winfo_id()) or w.winfo_id()
-        ex = _user32.GetWindowLongPtrW(self.hwnd, _GWL_EXSTYLE)
-        _user32.SetWindowLongPtrW(self.hwnd, _GWL_EXSTYLE, ex | _WS_EX_NOACTIVATE
-                                  | _WS_EX_TOOLWINDOW | _WS_EX_TRANSPARENT | _WS_EX_LAYERED)
+        self.win, self.hwnd = _overlay(root, "Gather recording", True)
+        w = self.win
         self.dot = tk.Label(w, text="●", fg="#ff3b30", bg=self.BG, font=("Segoe UI", 10))
         self.dot.pack(side="left", padx=(10, 0), pady=4)
         self.lbl = tk.Label(w, text="", fg="white", bg=self.BG, font=("Segoe UI", 10))
@@ -264,6 +298,158 @@ class Pill:
         self._pulse = None
         self._preview_timer = None
         self._count = 0
+        self.recording = self.expanded = False
+        self.items, self.rows = [], {}
+        self.on_remove, self.on_move = on_remove, on_move
+        self._drag_id = None
+        self._drop = 0
+        self.chevron_win, self.chevron_hwnd = _overlay(root, "Gather expand")
+        self.chevron = tk.Button(self.chevron_win, text="⌄", command=self.toggle_panel,
+                                fg="white", bg=self.BG, activebackground=self.FLASH,
+                                activeforeground="white", relief="flat", borderwidth=0,
+                                highlightthickness=0, takefocus=False, font=("Segoe UI", 12))
+        self.chevron.pack(fill="both", expand=True)
+        self.panel, self.panel_hwnd = _overlay(root, "Gather items")
+        self.scale = float(root.tk.call("tk", "scaling")) * 72 / 96
+        self.row_height = round(52 * self.scale)
+        self.canvas = tk.Canvas(self.panel, bg=self.BG, highlightthickness=0,
+                                takefocus=False, yscrollincrement=self.row_height)
+        self.scrollbar = tk.Scrollbar(self.panel, orient="vertical", command=self.canvas.yview,
+                                     takefocus=False)
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.content = tk.Frame(self.canvas, bg=self.BG)
+        self.content_window = self.canvas.create_window(0, 0, anchor="nw", window=self.content)
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.content_window, width=e.width))
+        self.empty = tk.Label(self.content, text="Nothing copied yet.", fg="#aaaaaa", bg=self.BG,
+                              font=("Segoe UI", 10), takefocus=False)
+        # Canvas drawings sit behind embedded windows; a raised frame keeps the marker visible.
+        self.marker = tk.Frame(self.canvas, bg="#ff6b61", height=2, takefocus=False)
+        self.panel.bind("<MouseWheel>", self._wheel)
+
+    def set_items(self, items) -> None:
+        self.items = list(items)
+        if self.expanded:
+            self._render_items()
+            self._place()
+
+    def toggle_panel(self) -> None:
+        if not self.recording:
+            return
+        if self.expanded:
+            self.collapse()
+        else:
+            self.expanded = True
+            self.chevron.config(text="⌃")
+            self._render_items()
+            self._place()
+            self.panel.deiconify()
+
+    def collapse(self) -> None:
+        self.expanded = False
+        self._drag_id = None
+        self.marker.place_forget()
+        self.panel.withdraw()
+        self.chevron.config(text="⌄")
+
+    def _render_items(self) -> None:
+        ids = {c.id for c in self.items}
+        for item_id in list(self.rows):
+            if item_id not in ids:
+                self.rows.pop(item_id)["frame"].destroy()
+        if self._drag_id not in ids:
+            self._drag_id = None
+            self.marker.place_forget()
+        self.empty.pack_forget()
+        for row in self.rows.values():
+            row["frame"].pack_forget()
+        for i, chunk in enumerate(self.items, 1):
+            if chunk.id not in self.rows:
+                self.rows[chunk.id] = self._row(chunk)
+            row = self.rows[chunk.id]
+            row["number"].config(text=str(i))
+            row["preview"].config(text=preview_text(chunk.text, 60))
+            app = chunk.app[:-4] if chunk.app.lower().endswith(".exe") else chunk.app
+            source = " · ".join(filter(None, (preview_text(app, 14), preview_text(chunk.title, 28)))) or "unknown"
+            row["source"].config(text=source)
+            row["time"].config(text=chunk.ts.strftime("%H:%M:%S"))
+            row["frame"].pack(fill="x")
+        if not self.items:
+            self.empty.pack(fill="x", pady=14)
+        if len(self.items) > 8:
+            self.scrollbar.pack(side="right", fill="y")
+        else:
+            self.scrollbar.pack_forget()
+        self.content.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox(self.content_window))
+
+    def _row(self, chunk) -> dict:
+        row = tk.Frame(self.content, bg=self.BG, height=self.row_height)
+        row.pack_propagate(False)
+        handle = tk.Label(row, text="⋮⋮", fg="#aaaaaa", bg=self.BG, cursor="fleur",
+                          font=("Segoe UI", 12), takefocus=False)
+        handle.pack(side="left", padx=(6, 2))
+        number = tk.Label(row, width=3, fg="#aaaaaa", bg=self.BG, font=("Segoe UI", 9), takefocus=False)
+        number.pack(side="left")
+        cross = tk.Button(row, text="×", command=lambda: self._remove(chunk.id),
+                          fg="#bbbbbb", bg=self.BG, activebackground=self.FLASH,
+                          activeforeground="white", relief="flat", borderwidth=0,
+                          highlightthickness=0, takefocus=False, font=("Segoe UI", 13))
+        cross.pack(side="right", padx=(4, 6))
+        text = tk.Frame(row, bg=self.BG)
+        text.pack(side="left", fill="both", expand=True, pady=5)
+        preview = tk.Label(text, anchor="w", fg="white", bg=self.BG, font=("Segoe UI", 9), takefocus=False)
+        preview.pack(fill="x")
+        meta = tk.Frame(text, bg=self.BG)
+        meta.pack(fill="x")
+        clock = tk.Label(meta, fg="#aaaaaa", bg=self.BG, font=("Segoe UI", 8), takefocus=False)
+        clock.pack(side="right")
+        source = tk.Label(meta, anchor="w", fg="#aaaaaa", bg=self.BG, font=("Segoe UI", 8), takefocus=False)
+        source.pack(side="left", fill="x", expand=True)
+        handle.bind("<ButtonPress-1>", lambda e: self._drag_start(e, chunk.id))
+        handle.bind("<B1-Motion>", self._drag_motion)
+        handle.bind("<ButtonRelease-1>", self._drag_end)
+        return dict(frame=row, handle=handle, number=number, cross=cross,
+                    preview=preview, source=source, time=clock)
+
+    def _remove(self, item_id: str) -> None:
+        if self.recording and self.expanded:
+            self.on_remove(item_id)
+
+    def _wheel(self, event):
+        if self.expanded and event.delta:
+            self.canvas.yview_scroll(-max(1, abs(event.delta) // 120) * (1 if event.delta > 0 else -1), "units")
+        return "break"
+
+    def _drag_start(self, event, item_id):
+        if self.recording and self.expanded:
+            self._drag_id = item_id
+            self._drag_motion(event)
+        return "break"
+
+    def _drag_motion(self, event):
+        if self._drag_id is None:
+            return "break"
+        y = event.y_root - self.canvas.winfo_rooty()
+        if y < 0 or y > self.canvas.winfo_height():
+            self.canvas.yview_scroll(-1 if y < 0 else 1, "units")
+        self._drop = max(0, min(len(self.items), int((self.canvas.canvasy(y) + self.row_height / 2) // self.row_height)))
+        line_y = self._drop * self.row_height - self.canvas.canvasy(0)
+        self.marker.place(x=0, y=max(0, min(line_y, self.canvas.winfo_height() - 2)), relwidth=1)
+        self.marker.lift()
+        return "break"
+
+    def _drag_end(self, event):
+        if self._drag_id is not None and self.recording and self.expanded:
+            self._drag_motion(event)
+            item_id = self._drag_id
+            origin = next(i for i, c in enumerate(self.items) if c.id == item_id)
+            position = self._drop - (self._drop > origin)
+            self._drag_id = None
+            self.marker.place_forget()
+            if origin != position:
+                self.on_move(item_id, position)
+        return "break"
 
     def _set(self, count: int, message: str = "") -> None:
         self._count = count
@@ -274,14 +460,28 @@ class Pill:
         r = wintypes.RECT()
         _user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0)  # SPI_GETWORKAREA (primary)
         self.win.update_idletasks()
-        self.win.geometry(f"+{(r.left + r.right - self.win.winfo_reqwidth()) // 2}+{r.top + 6}")
+        button = round(28 * self.scale)
+        body = min(self.win.winfo_reqwidth(), max(1, r.right - r.left - button - 12))
+        height = self.win.winfo_reqheight()
+        x, y = (r.left + r.right - body - button) // 2, r.top + 6
+        self.win.geometry(f"{body}x{height}+{x}+{y}")
+        self.chevron_win.geometry(f"{button}x{height}+{x + body}+{y}")
+        if self.expanded:
+            width = min(round(420 * self.scale), r.right - r.left - 12)
+            panel_x = max(r.left + 6, min(x, r.right - width - 6))
+            panel_y = y + height + 4
+            panel_h = min(max(1, min(8, len(self.items))) * self.row_height, r.bottom - panel_y - 6)
+            self.panel.geometry(f"{width}x{max(1, panel_h)}+{panel_x}+{panel_y}")
 
     def show(self, count: int) -> None:
+        self.recording = True
+        self.collapse()
         self._cancel_preview()
         self._set(count)
         self._place()
         self.win.deiconify()
         self.win.attributes("-topmost", True)
+        self.chevron_win.deiconify()
 
     def update(self, count: int, message: str = "") -> None:
         """Set count and briefly pulse."""
@@ -316,6 +516,9 @@ class Pill:
     def saving(self) -> None:
         """Show 'Saving…' (grey dot, distinct from recording) while an export runs."""
         self._cancel_preview()
+        self.recording = False
+        self.collapse()
+        self.chevron_win.withdraw()
         self.lbl.config(text="Saving…")
         self.dot.config(fg="#9a9a9a")
         self._place()
@@ -324,4 +527,7 @@ class Pill:
 
     def hide(self) -> None:
         self._cancel_preview()
+        self.recording = False
+        self.collapse()
+        self.chevron_win.withdraw()
         self.win.withdraw()

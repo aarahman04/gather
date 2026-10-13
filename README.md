@@ -32,6 +32,7 @@ taskbar if you want it always visible. You don't need it, though: a small red
 | Start / stop recording | **Middle-click** (default), **Alt+C**, or left-click the tray icon |
 | While recording | every text copy is collected; the pill counts items and briefly previews each copy |
 | Remove a wrong copy | **Alt+Z**, or tray → **Remove last item (Alt+Z)**; repeat to remove earlier items |
+| See and arrange all copies | click **⌄** on the pill; drag a left handle to reorder, or click a row's **×** to remove it |
 | After stopping | the file is on your clipboard. Press **Ctrl+V** wherever you want it |
 | While saving | the pill shows a grey **Saving…** (large PDFs take a few seconds); you can start a new session meanwhile |
 
@@ -43,9 +44,22 @@ The pill shows the first 40 characters of a copy for about two seconds, with lin
 breaks shown as spaces and **…** when shortened. Undo shows **Removed: <preview>**;
 an empty session shows **Nothing to undo**. Previews always mask recognized secrets
 using the same masker as exports, even when export masking is switched off. The pill
-stays out of your way: it does not take focus and clicks pass through it.
+stays out of your way: it does not take focus and clicks pass through its body.
 
-**Alt+Z belongs to Gather only while recording.** It removes the most recent item
+Click the pill's **⌄** button to see every collected item in a wider dark panel;
+**⌃** collapses it. Each row shows its position, a short masked preview, source app
+and window title, and capture time. Drag the **⋮⋮** handle on the left to move an
+item; a bright line marks where it will land. Click **×** on the right to remove it
+immediately. There is no redo. The list updates as you copy and scrolls with the
+mouse wheel when there are more than eight items. Panel clicks and drags never
+take focus from the app you are copying from, and do not toggle recording.
+The panel closes on stop, saving or cancellation; the file uses the order at stop.
+Panel previews and source titles always mask recognized secrets, even with
+**Mask secrets** off. Removing and moving items is recorded before changing the
+list; if the backup write fails, the edit is kept unchanged and Gather tells you.
+
+**Alt+Z belongs to Gather only while recording.** It removes the most recently
+captured item still present, even after dragging it to another position,
 without changing your clipboard; there is no redo. If another app owns Alt+Z, Gather
 notifies you and the tray action still works. Undo is recorded in the crash journal,
 so recovery does not restore removed items. Copying a removed item again collects it
@@ -113,8 +127,10 @@ Windows 11:
 ...
 ```
 
-Gather keeps the copied text exactly as it was copied. It skips a copy that is the same
-as the one before it (apps often fire twice), ignores non-text copies (images, files),
+Gather keeps the copied text exactly as it was copied. The file follows the panel's
+order, with position numbers and each item's original source and time. It skips a
+copy that is the same as the most recently captured item still present (apps often
+fire twice), ignores non-text copies (images, files),
 and ignores copies that password managers mark as private. Settings live in
 `%APPDATA%\Gather\config.json`.
 

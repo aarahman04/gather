@@ -121,6 +121,36 @@ def clipboard_files():
         win32.user32.CloseClipboard()
 
 
+def overlay(title, pid):
+    hwnd = win32.user32.FindWindowExW(None, None, None, title)
+    assert hwnd and win32._window_pid(hwnd) == pid, f"Missing owned overlay: {title}"
+    return hwnd
+
+
+def rectangle(hwnd):
+    rect = w.RECT()
+    assert win32.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return rect.left, rect.top, rect.right, rect.bottom
+
+
+def screenshot(pid, name, expanded=False):
+    from PIL import Image, ImageGrab
+    body = rectangle(overlay("Gather recording", pid))
+    button = rectangle(overlay("Gather expand", pid))
+    pill = ImageGrab.grab((body[0], body[1], button[2], body[3]))
+    if expanded:
+        panel = ImageGrab.grab(rectangle(overlay("Gather items", pid)))
+        image = Image.new("RGB", (max(pill.width, panel.width), pill.height + 4 + panel.height), "#151515")
+        image.paste(pill, ((image.width - pill.width) // 2, 0))
+        image.paste(panel, (0, pill.height + 4))
+    else:
+        image = pill
+    path = ROOT / "handoff" / f"v0.2.4-{name}.png"
+    path.parent.mkdir(exist_ok=True)
+    image.save(path)
+    print(f"Screenshot: {path.name}")
+
+
 def main():
     exe = (ROOT / "dist" / "Gather.exe").resolve()
     assert exe.is_file()
@@ -129,12 +159,15 @@ def main():
     folder = (win32.documents_dir() / "Gather").resolve()
     before = set(folder.glob("gather-*.md"))
     marker = "codex-exe-" + uuid.uuid4().hex
-    copies = [marker + "-first", marker + "-second"]
+    copies = [marker + "-first", marker + "-second", marker + "-third"]
     process = None
     owned_pids = set()
     verified_path = None
     # Reuse the blank native target used by the mouse tests; never click a user's app.
     from test_mouse import target, middle, send
+    from test_panel import click_point, drag_points
+    win32._sig(win32.user32, "IsWindowVisible", w.BOOL, w.HWND)
+    win32._sig(win32.user32, "GetFocus", w.HWND)
     window = target.__wrapped__()
     events, pump = next(window)
     with tempfile.TemporaryDirectory(prefix="gather-codex-config-") as settings:
@@ -150,6 +183,7 @@ def main():
                                                              win32._CLASS_NAME, "Gather"))
             assert process_image(win32._window_pid(hwnd)) == exe
             owned_pids.add(win32._window_pid(hwnd))
+            pid = win32._window_pid(hwnd)
             time.sleep(0.3)
             mods, vk = win32.HOTKEYS[win32.DEFAULT_HOTKEY]
             taken = not win32.user32.RegisterHotKey(None, 9281, mods, vk)
@@ -178,6 +212,25 @@ def main():
             hotkey((0x12, ord("Z")))
             time.sleep(0.3)
             assert win32._get_clipboard_text() == wrong, "Undo touched the clipboard"
+            source = foreground()
+            source_focus = win32.user32.GetFocus()
+            time.sleep(2.1)  # stable collapsed pill after the temporary undo preview
+            screenshot(pid, "pill")
+            button = rectangle(overlay("Gather expand", pid))
+            click_point((button[0] + button[2]) // 2, (button[1] + button[3]) // 2, pump)
+            panel_hwnd = overlay("Gather items", pid)
+            wait_for(lambda: win32.user32.IsWindowVisible(panel_hwnd))
+            time.sleep(0.2)
+            screenshot(pid, "panel-3", True)
+            rect = rectangle(panel_hwnd)
+            row_height = (rect[3] - rect[1]) // 3
+            click_point(rect[2] - 20, rect[1] + row_height * 3 // 2, pump)
+            wait_for(lambda: rectangle(panel_hwnd)[3] - rectangle(panel_hwnd)[1] == row_height * 2)
+            drag_points((rect[0] + 15, rect[1] + row_height * 3 // 2),
+                        (rect[0] + 15, rect[1] + 2), pump)
+            time.sleep(0.2)
+            assert win32.user32.GetForegroundWindow() == source and win32.user32.GetFocus() == source_focus
+            assert win32._get_clipboard_text() == wrong, "Panel edits touched the clipboard"
             hotkey()
             paths = wait_for(clipboard_files)
             assert len(paths) == 1
@@ -185,26 +238,36 @@ def main():
             assert path.parent == folder and path not in before and path.suffix == ".md"
             text = path.read_text(encoding="utf-8")
             assert "2 items" in text.splitlines()[0]
-            assert all(text.count(copy) == 1 for copy in copies)
-            assert text.index(copies[0]) < text.index(copies[1])
-            assert wrong not in text and undo_key_free()
+            assert all(text.count(copy) == 1 for copy in (copies[2], copies[0]))
+            assert text.index(copies[2]) < text.index(copies[0])
+            assert wrong not in text and copies[1] not in text and undo_key_free()
+            assert not win32.user32.IsWindowVisible(panel_hwnd), "Panel did not collapse on stop"
             verified_path = path
             assert events == [], "EXE did not consume the middle click"
-            print(f"PASS: middle-click start, Alt+Z undo, Alt+C stop, two ordered copies, CF_HDROP={path.name}")
+            print(f"PASS: middle-click start, Alt+Z undo, panel cross + drag without focus/clipboard changes, "
+                  f"Alt+C stop, exported third/first order, CF_HDROP={path.name}")
             # The reverse pairing proves both triggers remain available for start and stop.
             win32.copy_text_to_clipboard("")
             hotkey()
             time.sleep(0.3)
-            subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-Clipboard -Value '{marker}-third'"],
-                           check=True, timeout=30)
-            time.sleep(0.3)
+            many = [f"{marker}-many-{i:02}" for i in range(1, 11)]
+            for i, copy in enumerate(many):
+                subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-Clipboard -Value '{copy}'"],
+                               check=True, timeout=30)
+                time.sleep(0.15)
+                if i == 0:
+                    button = rectangle(overlay("Gather expand", pid))
+                    click_point((button[0] + button[2]) // 2, (button[1] + button[3]) // 2, pump)
+            screenshot(pid, "panel-10", True)
             send(middle(), middle(True))
             pump()
             other = wait_for(clipboard_files)
             assert len(other) == 1 and other[0] != path
-            assert marker + "-third" in other[0].read_text(encoding="utf-8")
+            body = other[0].read_text(encoding="utf-8")
+            assert "10 items" in body.splitlines()[0] and all(copy in body for copy in many)
+            assert [body.index(copy) for copy in many] == sorted(body.index(copy) for copy in many)
             assert events == []
-            print("PASS: Alt+C start, middle-click stop; consumed down/up")
+            print("PASS: Alt+C start, ten live panel rows, middle-click stop with panel open; consumed down/up")
         finally:
             try:
                 for pid in sorted(owned_pids, key=lambda pid: pid != process.pid):

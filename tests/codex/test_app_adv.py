@@ -37,6 +37,7 @@ def fake_app(tmp_path, monkeypatch, recording=True):
     app.tray = SimpleNamespace(set_recording=lambda *args: None, stop=lambda: None, hotkey_ok=True,
                                notify=lambda *args: app.notifications.append(args[1]))
     app.pill = SimpleNamespace(hide=lambda: setattr(app, "pill_state", "hidden"),
+                               set_items=lambda items: setattr(app, "panel_items", list(items)),
                                show=lambda n: setattr(app, "pill_state", f"recording {n}"),
                                update=lambda n, message="": (setattr(app, "pill_state", f"recording {n}"),
                                                              setattr(app, "preview", message)),
@@ -73,7 +74,7 @@ def test_failed_export_retains_retryable_session(tmp_path, monkeypatch):
     monkeypatch.setattr(writers, "write", maybe_fail)
     app.finish()
     settle(app)
-    assert app.session is saved
+    assert app.session == saved and app.session is not saved  # stop exports a snapshot
     assert app.journal is journal and journal.path.exists()
     assert app.capturing and app.pill_state == "recording 1"
     assert not list(app.folder.glob("*"))
