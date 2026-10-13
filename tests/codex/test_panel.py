@@ -1,9 +1,11 @@
 """Ordered items, durable edits and a clickable overlay that leaves the source focused."""
 import ctypes
+import gc
 import json
 import os
 import subprocess
 import sys
+import time
 import tkinter as tk
 from ctypes import wintypes as w
 
@@ -240,6 +242,7 @@ def tk_root():
     root = tk.Tk(); root.withdraw()
     yield root
     root.destroy()
+    gc.collect()  # dispose Tk cycles on their owner thread before later export tests
 
 
 @pytest.fixture
@@ -249,6 +252,7 @@ def panel_app(tmp_path, monkeypatch, target, tk_root):
     app.root = root
     app.pill = ui.Pill(root, lambda item_id: app.q.put(("remove", item_id)),
                        lambda item_id, pos: app.q.put(("move", item_id, pos)))
+    app.pill._motion = False  # functional tests finish transitions synchronously
     app.on_toggle()
     root.update()
     try:
@@ -260,6 +264,8 @@ def panel_app(tmp_path, monkeypatch, target, tk_root):
             root.after_cancel(timer)
         for window in (app.pill.win, app.pill.chevron_win, app.pill.panel):
             window.destroy()
+        app.pill = None
+        gc.collect()  # do not leave Tk image cycles for a later export worker to collect
 
 
 def click_point(x, y, pump, receiver_pid=None):
@@ -273,7 +279,7 @@ def click_point(x, y, pump, receiver_pid=None):
     assert win32.user32.GetForegroundWindow() == hwnd
 
 
-def drag_points(start, finish, pump, receiver_pid=None):
+def drag_points(start, finish, pump, receiver_pid=None, steps=1, hold=0):
     hwnd = foreground()
     assert win32.user32.SetCursorPos(*start)
     assert win32._window_pid(win32.user32.WindowFromPoint(w.POINT(*start))) in {os.getpid(), receiver_pid}, "Pointer outside owned test windows"
@@ -283,9 +289,15 @@ def drag_points(start, finish, pump, receiver_pid=None):
     try:
         pump()
         assert foreground() == hwnd
-        assert win32.user32.SetCursorPos(*finish)
-        assert win32._window_pid(win32.user32.WindowFromPoint(w.POINT(*finish))) in {os.getpid(), receiver_pid}, "Drop outside owned test windows"
-        pump()
+        for step in range(1, steps + 1):
+            point = tuple(round(a + (b - a) * step / steps) for a, b in zip(start, finish))
+            assert foreground() == hwnd
+            assert win32.user32.SetCursorPos(*point)
+            assert win32._window_pid(win32.user32.WindowFromPoint(w.POINT(*point))) in {os.getpid(), receiver_pid}, "Drop outside owned test windows"
+            pump()
+        deadline = time.monotonic() + hold
+        while time.monotonic() < deadline:
+            pump()
     finally:
         assert win32.user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT)) == 1
     pump()
@@ -295,6 +307,228 @@ def drag_points(start, finish, pump, receiver_pid=None):
 def widget_click(widget, pump):
     click_point(widget.winfo_rootx() + widget.winfo_width() // 2,
                 widget.winfo_rooty() + widget.winfo_height() // 2, pump)
+
+
+def settle_ui(app, timeout=2):
+    deadline = time.monotonic() + timeout
+    while True:
+        app.root.update()
+        if app.pill._panel_timer is None and app.pill._rows_timer is None:
+            return
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize("origin,destination", [(i, j) for i in range(3) for j in range(3)])
+def test_widget_drop_lands_at_marker_in_both_directions(panel_app, origin, destination):
+    app, pill = panel_app, panel_app.pill
+    for text in ("first", "middle", "last"):
+        app.on_clip(text, "test.exe", "source", T)
+    pill.toggle_panel(); app.root.update()
+    before = app.session.chunks.copy()
+    chunk = before.pop(origin); before.insert(destination, chunk)
+    handle = pill.rows[chunk.id]["handle"]
+    boundary = destination + (destination > origin)
+    rootx = pill.canvas.winfo_rootx() + 12
+    rooty = pill.canvas.winfo_rooty() + boundary * pill.row_height
+    rooty = min(rooty, pill.canvas.winfo_rooty() + pill.canvas.winfo_height() - 2)
+    handle.event_generate("<ButtonPress-1>", x=2, y=2)
+    handle.event_generate("<B1-Motion>", rootx=rootx, rooty=rooty)
+    handle.event_generate("<ButtonRelease-1>", rootx=rootx, rooty=rooty)
+    app.drain(); app.root.update()
+    assert app.session.chunks == before
+    assert [pill.rows[c.id]["frame"].winfo_y() for c in app.session.chunks] == [0, pill.row_height, 2 * pill.row_height]
+    assert app.root.grab_current() is None
+
+
+def test_new_copy_during_drag_keeps_handle_mapped_and_mouse_grab(panel_app):
+    app, pill = panel_app, panel_app.pill
+    for text in ("first", "middle", "last"):
+        app.on_clip(text, "test.exe", "source", T)
+    pill.toggle_panel(); app.root.update()
+    item_id = app.session.latest().id
+    handle = pill.rows[item_id]["handle"]
+    handle.event_generate("<ButtonPress-1>", x=2, y=2)
+    handle.event_generate("<B1-Motion>", rootx=pill.canvas.winfo_rootx() + 12,
+                          rooty=pill.canvas.winfo_rooty() + 2)
+    app.root.update()
+    dragged_y = pill.rows[item_id]["frame"].winfo_y()
+    app.on_clip("arrived while dragging", "test.exe", "source", T)
+    app.root.update()
+    assert handle.winfo_ismapped() and handle.grab_current() is handle
+    assert pill.rows[item_id]["frame"].winfo_y() == dragged_y
+    handle.event_generate("<B1-Motion>", rootx=pill.canvas.winfo_rootx() + 12,
+                          rooty=pill.canvas.winfo_rooty() + 2)
+    handle.event_generate("<ButtonRelease-1>", rootx=pill.canvas.winfo_rootx() + 12,
+                          rooty=pill.canvas.winfo_rooty() + 2)
+    app.drain(); app.root.update()
+    assert texts(app.session) == ["last", "first", "middle", "arrived while dragging"]
+    assert app.root.grab_current() is None
+
+
+def test_whole_masked_row_tracks_pointer_and_neighbours_slide(panel_app):
+    app, pill = panel_app, panel_app.pill
+    for text in ("first", "middle", "sk-" + "A" * 32):
+        app.on_clip(text, "test.exe", "source", T)
+    pill.toggle_panel(); app.root.update()
+    pill._motion = True
+    before = texts(app.session)
+    source = foreground()
+    row = pill.rows[app.session.latest().id]
+    handle, frame = row["handle"], row["frame"]
+    start = handle.winfo_rooty() + 2
+    handle.event_generate("<ButtonPress-1>", x=2, y=2)
+    handle.event_generate("<B1-Motion>", rootx=handle.winfo_rootx() + 2,
+                          rooty=start - pill.row_height - 10)
+    app.root.update()
+    assert frame.winfo_y() == pill.row_height - 10
+    assert frame.cget("highlightbackground") == "#ff6b61"
+    assert "A" * 32 not in row["preview"].cget("text")
+    assert texts(app.session) == before  # visual preview does not edit the journal yet
+    neighbour = pill.rows[app.session.chunks[1].id]["frame"]
+    time.sleep(0.04); app.root.update()
+    assert pill.row_height < neighbour.winfo_y() < 2 * pill.row_height
+    assert foreground() == source and handle.grab_current() is handle
+    handle.event_generate("<ButtonRelease-1>", rootx=pill.canvas.winfo_rootx() + 12,
+                          rooty=pill.canvas.winfo_rooty() - 20)
+    app.drain(); settle_ui(app)
+    assert texts(app.session) == [before[2], before[0], before[1]]
+    assert frame.winfo_y() == 0 and app.root.grab_current() is None
+    assert foreground() == source
+
+
+@pytest.mark.parametrize("failure", ["outside", "journal"])
+def test_drag_cancel_or_journal_failure_restores_row_positions(panel_app, monkeypatch, failure):
+    app, pill = panel_app, panel_app.pill
+    for text in ("first", "middle", "last"):
+        app.on_clip(text, "test.exe", "source", T)
+    pill.toggle_panel(); app.root.update()
+    before = app.session.chunks.copy()
+    handle = pill.rows[before[-1].id]["handle"]
+    if failure == "journal":
+        def fail(*args):
+            raise OSError("disk full")
+        monkeypatch.setattr(app.journal, "move", fail)
+    handle.event_generate("<ButtonPress-1>", x=2, y=2)
+    x = pill.canvas.winfo_rootx() + 12
+    y = pill.canvas.winfo_rooty() + 2
+    handle.event_generate("<B1-Motion>", rootx=x, rooty=y)
+    app.root.update()
+    assert pill.rows[before[0].id]["frame"].winfo_y() == pill.row_height
+    handle.event_generate("<ButtonRelease-1>", rootx=x if failure == "journal" else x - 50, rooty=y)
+    app.drain(); settle_ui(app)
+    assert app.session.chunks == before
+    assert [pill.rows[c.id]["frame"].winfo_y() for c in before] == [0, pill.row_height, 2 * pill.row_height]
+    assert app.root.grab_current() is None
+    if failure == "journal":
+        assert "order unchanged" in app.notifications[-1]
+
+
+def test_grabbing_a_moving_row_does_not_jump(panel_app):
+    app, pill = panel_app, panel_app.pill
+    for text in ("first", "middle", "last"):
+        app.on_clip(text, "test.exe", "source", T)
+    pill.toggle_panel(); app.root.update()
+    pill._motion = True
+    item_id = app.session.latest().id
+    app.on_move(item_id, 0)
+    time.sleep(0.04); app.root.update()
+    row = pill.rows[item_id]
+    y = row["frame"].winfo_y()
+    assert 0 < y < 2 * pill.row_height
+    row["handle"].event_generate("<ButtonPress-1>", x=2, y=2)
+    app.root.update()
+    assert row["frame"].winfo_y() == y
+    row["handle"].event_generate("<ButtonRelease-1>", rootx=pill.canvas.winfo_rootx() - 20,
+                                rooty=pill.canvas.winfo_rooty() + 2)
+    app.drain(); settle_ui(app)
+    assert texts(app.session) == ["last", "first", "middle"]
+    assert row["frame"].winfo_y() == 0 and app.root.grab_current() is None
+
+
+def test_edge_scroll_continues_while_held_and_release_does_not_scroll_again(panel_app):
+    app, pill = panel_app, panel_app.pill
+    for i in range(15):
+        app.on_clip(f"item-{i}", "test.exe", "source", T)
+    pill.toggle_panel(); app.root.update()
+    handle = pill.rows[app.session.chunks[4].id]["handle"]
+    handle.event_generate("<ButtonPress-1>", x=2, y=2)
+    x, y = pill.canvas.winfo_rootx() + 12, pill.canvas.winfo_rooty() + pill.canvas.winfo_height() - 2
+    handle.event_generate("<B1-Motion>", rootx=x, rooty=y)
+    before = pill.canvas.yview()
+    deadline = time.monotonic() + 0.28
+    while time.monotonic() < deadline:
+        app.root.update(); time.sleep(0.01)
+    after = pill.canvas.yview()
+    assert after[0] > before[0] and pill._scroll_timer is not None
+    boundary = pill._drop
+    handle.event_generate("<ButtonRelease-1>", rootx=x, rooty=y)
+    assert pill.canvas.yview() == after and pill._scroll_timer is None
+    app.drain(); app.root.update()
+    assert app.session.chunks[boundary - 1].text == "item-4"
+    assert app.root.grab_current() is None
+
+
+@pytest.mark.parametrize("cancel", ["outside", "collapse", "undo"])
+def test_cancel_drag_releases_capture_and_timers(panel_app, cancel):
+    app, pill = panel_app, panel_app.pill
+    for i in range(10):
+        app.on_clip(f"item-{i}", "test.exe", "source", T)
+    pill.toggle_panel(); app.root.update()
+    before = texts(app.session)
+    handle = pill.rows[app.session.latest().id]["handle"]
+    handle.event_generate("<ButtonPress-1>", x=2, y=2)
+    if cancel == "outside":
+        handle.event_generate("<ButtonRelease-1>", rootx=pill.canvas.winfo_rootx() - 10,
+                              rooty=pill.canvas.winfo_rooty() + 2)
+        app.drain()
+        assert texts(app.session) == before
+    elif cancel == "collapse":
+        pill.collapse()
+    else:
+        app.on_undo()
+    assert app.root.grab_current() is None and pill._scroll_timer is None
+    assert pill._drag_id is None and not pill.marker.winfo_ismapped()
+
+
+def test_eased_rows_panel_and_vector_arrow_keep_focus(panel_app):
+    app, pill = panel_app, panel_app.pill
+    for text in ("first", "middle", "last"):
+        app.on_clip(text, "test.exe", "source", T)
+    pill._motion = True
+    source = foreground()
+    pill.toggle_panel(); app.root.update()
+    assert pill._panel_timer is not None and pill._panel_fraction < 1
+    time.sleep(0.04); app.root.update()
+    assert 0 < pill._panel_fraction < 1 and foreground() == source
+    settle_ui(app)
+    assert pill.chevron.cget("image") == str(pill._chevrons[-1])
+    latest = app.session.latest()
+    frame = pill.rows[latest.id]["frame"]
+    app.on_move(latest.id, 0)
+    assert pill._rows_timer is not None
+    time.sleep(0.04); app.root.update()
+    assert 0 < frame.winfo_y() < 2 * pill.row_height and foreground() == source
+    settle_ui(app)
+    assert frame.winfo_y() == 0
+    pill.toggle_panel(); app.root.update()
+    assert pill.panel.winfo_ismapped()  # visible while easing closed
+    settle_ui(app)
+    assert not pill.panel.winfo_ismapped() and pill.chevron.cget("image") == str(pill._chevrons[0])
+    assert foreground() == source
+
+
+def test_rapid_toggle_reverse_and_stop_cancel_animation(panel_app):
+    app, pill = panel_app, panel_app.pill
+    pill._motion = True
+    pill.toggle_panel(); time.sleep(0.03); app.root.update()
+    fraction = pill._panel_fraction
+    pill.toggle_panel(); app.root.update()
+    assert pill._panel_fraction <= fraction
+    pill.toggle_panel(); settle_ui(app)
+    assert pill.expanded and pill._panel_fraction == 1
+    pill.toggle_panel(); app.on_cancel(); app.root.update()
+    assert pill._panel_timer is None and not pill.panel.winfo_ismapped()
 
 
 def test_native_drag_and_keyboard_focus_stay_in_source(panel_app, target):
@@ -367,7 +601,7 @@ def test_chevron_cross_rows_live_updates_and_no_activation(panel_app, target):
     def update():
         app.root.update(); app.drain(); app.root.update(); pump()
     widget_click(pill.chevron, update)
-    assert pill.expanded and pill.chevron.cget("text") == "⌃" and pill.empty.winfo_ismapped()
+    assert pill.expanded and pill.chevron.cget("text") == "Hide items" and pill.empty.winfo_ismapped()
     app.cfg.mask = False
     app.on_clip(SECRET + "\n\ud800\x00", "test.exe", SECRET + "\ud800", T)
     update()

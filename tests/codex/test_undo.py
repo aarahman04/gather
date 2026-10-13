@@ -1,9 +1,8 @@
-"""Recording-only undo, crash durability and temporary masked previews."""
+"""Recording-only undo, crash durability and a count-only pill."""
 import ctypes
 import subprocess
 import sys
 import threading
-import tkinter as tk
 
 import pytest
 
@@ -34,12 +33,12 @@ def test_repeated_undo_dedupe_empty_and_clipboard(tmp_path, monkeypatch):
     app.on_clip("three", "a.exe", "test", T)  # duplicate ignored
     assert len(app.session) == 3
     before = win32._get_clipboard_text()
-    for count, preview in ((2, "three"), (1, "two lines"), (0, "unsaved synthetic copy")):
+    for count in (2, 1, 0):
         app.on_undo()
         assert len(app.session) == count
-        assert app.preview == "Removed: " + preview
+        assert app.pill_state == f"recording {count}"
     app.on_undo()
-    assert app.preview == "Nothing to undo" and len(app.session) == 0
+    assert app.notifications[-1] == "Nothing to undo." and len(app.session) == 0
     app.on_clip("unsaved synthetic copy", "a.exe", "test", T)
     assert len(app.session) == 1  # recopy after undo must be captured
     assert win32._get_clipboard_text() == before
@@ -47,14 +46,14 @@ def test_repeated_undo_dedupe_empty_and_clipboard(tmp_path, monkeypatch):
     assert [c.text for c in recovered.chunks] == ["unsaved synthetic copy"]
 
 
-def test_capture_and_removed_previews_always_mask(tmp_path, monkeypatch):
+def test_capture_and_removal_never_send_copied_text_to_pill(tmp_path, monkeypatch):
     app = fake_app(tmp_path, monkeypatch, recording=False)
     app.cfg.mask = False  # export preference must not expose a key on screen
     app.on_toggle()
     app.on_clip(SECRET, "a.exe", "test", T)
-    assert app.preview == "[masked]" and app.session.chunks[0].text == SECRET
+    assert app.pill_state == "recording 1" and app.session.chunks[0].text == SECRET
     app.on_undo()
-    assert app.preview == "Removed: [masked]"
+    assert app.pill_state == "recording 0"
     app.on_cancel()
     app.on_undo()  # idle no-op
     assert app.pill_state == "hidden" and app.session is None
@@ -190,7 +189,7 @@ def test_undo_registration_failure_keeps_recording_and_tray(tmp_path, monkeypatc
     assert app.capturing and not app.tray.undo_ok
     assert "Alt+Z" in app.notifications[-1] and "Remove last item" in app.notifications[-1]
     app.on_undo()
-    assert len(app.session) == 0 and app.preview.startswith("Removed:")
+    assert len(app.session) == 0 and app.pill_state == "recording 0"
 
 
 def test_actual_alt_z_conflict_keeps_clipboard_listener():
@@ -218,42 +217,23 @@ def test_actual_alt_z_conflict_keeps_clipboard_listener():
         thread.join(3)
 
 
-def test_pill_preview_timer_focus_and_click_through(monkeypatch):
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        pill = ui.Pill(root)
-        timers, cancelled = {}, []
-
-        def schedule(ms, fn):
-            token = str(len(timers))
-            timers[token] = (ms, fn)
-            return token
-
-        monkeypatch.setattr(root, "after", schedule)
-        monkeypatch.setattr(root, "after_cancel", cancelled.append)
-        foreground = win32.user32.GetForegroundWindow()
-        pill.show(0)
-        pill.update(1, "[masked]")
-        assert pill.lbl.cget("text") == "Gather  1  ·  [masked]"
-        first = pill._preview_timer
-        assert timers[first][0] == 2000
-        pill.update(0, "Removed: [masked]")
-        assert first in cancelled
-        timers[pill._preview_timer][1]()
-        assert pill.lbl.cget("text") == "Gather  0" and pill._preview_timer is None
-        pill.update(0, "Nothing to undo")
-        timer = pill._preview_timer
-        pill.saving()
-        assert timer in cancelled and pill.lbl.cget("text") == "Saving…"
-        pill.show(0)
-        pill.update(1, "latest")
-        timer = pill._preview_timer
-        pill.hide()
-        assert timer in cancelled
-        root.update()
-        assert win32.user32.GetForegroundWindow() == foreground
-        ex = ui._user32.GetWindowLongPtrW(pill.hwnd, ui._GWL_EXSTYLE)
-        assert ex & ui._WS_EX_NOACTIVATE and ex & ui._WS_EX_TRANSPARENT
-    finally:
-        root.destroy()
+def test_count_only_pill_focus_and_click_through(target):
+    # A fresh interpreter avoids the local Anaconda repeated-Tk-init failure.
+    subprocess.run([sys.executable, "-c", '''
+import tkinter as tk
+from gather import ui, win32
+root = tk.Tk(); root.withdraw()
+foreground = win32.user32.GetForegroundWindow()
+pill = ui.Pill(root)
+pill.show(0); pill.update(1)
+assert pill.lbl.cget('text') == 'Gather  1'
+pill.update(0)
+assert pill.lbl.cget('text') == 'Gather  0'
+pill.saving()
+assert pill.lbl.cget('text') == 'Saving…'
+pill.show(0); pill.update(1); pill.hide(); root.update()
+assert win32.user32.GetForegroundWindow() == foreground
+ex = ui._user32.GetWindowLongPtrW(pill.hwnd, ui._GWL_EXSTYLE)
+assert ex & ui._WS_EX_NOACTIVATE and ex & ui._WS_EX_TRANSPARENT
+root.destroy()
+'''], check=True, timeout=20)

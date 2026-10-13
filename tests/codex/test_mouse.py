@@ -162,6 +162,8 @@ def test_injected_modes(target, mode, with_alt, swallow):
                 send(alt(True))
             send(middle(True))
         pump()
+        if not swallow:
+            assert wait_for(lambda: (pump(), events == ["down", "up"])[1], timeout=2)
         assert events == ([] if swallow else ["down", "up"])
         assert hits == ([thread.ident] if swallow else [])
     finally:

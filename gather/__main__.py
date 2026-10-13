@@ -40,7 +40,7 @@ class App:
                            on_move=lambda item_id, position: self.q.put(("move", item_id, position)))
         actions = {name: (lambda n=name: self.q.put((n,))) for name in
                    ("toggle", "undo", "cancel", "copy_text", "copy_path",
-                    "open_folder", "quit", "autostart")}
+                    "open_folder", "help", "quit", "autostart")}
         actions["hotkey"] = lambda name: self.q.put(("hotkey_change", name))
         actions["mouse_trigger"] = lambda name: self.q.put(("mouse_trigger_change", name))
         self.tray = ui.Tray(self.cfg, actions)
@@ -99,26 +99,26 @@ class App:
     def on_clip(self, text, app, title, ts) -> None:
         if self.session is not None and self.session.add(text, app, title, ts):
             self.jot("append", self.session.chunks[-1])
-            self.refresh(ui.preview_text(self.session.chunks[-1].text))
+            self.refresh()
 
     def on_undo(self) -> None:
         if self.session is None:
             return
         if not self.session.chunks:
-            return self.refresh("Nothing to undo")
+            return self.tray.notify("Gather", "Nothing to undo.")
         # Persist first: a crash immediately after popping must not resurrect this item.
         if not self.persist_edit("undo", self.session.latest().id):
             return
-        removed = self.session.undo()
-        self.refresh(f"Removed: {ui.preview_text(removed.text)}")
+        self.session.undo()
+        self.refresh()
 
     def on_remove(self, item_id: str) -> None:
-        if self.session is None or (chunk := self.session.get(item_id)) is None:
+        if self.session is None or self.session.get(item_id) is None:
             return
         if not self.persist_edit("remove", item_id):
             return
         self.session.remove(item_id)
-        self.refresh(f"Removed: {ui.preview_text(chunk.text)}")
+        self.refresh()
 
     def on_move(self, item_id: str, position: int) -> None:
         if self.session is None or (chunk := self.session.get(item_id)) is None:
@@ -128,6 +128,7 @@ class App:
         if self.session.chunks.index(chunk) == position:
             return
         if not self.persist_edit("move", item_id, position):
+            self.refresh()  # return the dragged row to the unchanged, durable order
             return
         self.session.move(item_id, position)
         self.refresh()
@@ -162,6 +163,9 @@ class App:
     def on_open_folder(self) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
         os.startfile(self.folder)
+
+    def on_help(self) -> None:
+        ui.show_help(self.root, self.cfg)
 
     def on_autostart(self) -> None:
         if getattr(sys, "frozen", False):
@@ -276,11 +280,11 @@ class App:
             self.tray.notify("Gather", "Couldn't register Alt+Z (in use or Gather is busy). "
                                       "Use tray → Remove last item to undo.")
 
-    def refresh(self, message: str = "") -> None:
+    def refresh(self) -> None:
         n = len(self.session)
         self.tray.set_recording(True, n)
         self.pill.set_items(self.session.chunks)
-        self.pill.update(n, message)
+        self.pill.update(n)
 
     def show_pill(self) -> None:
         if self.session is None:  # a recording's pill wins over "Saving…"

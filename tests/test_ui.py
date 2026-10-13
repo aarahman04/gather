@@ -42,10 +42,27 @@ def test_icons_differ():
     assert ui._icon_image(False).tobytes() != ui._icon_image(True).tobytes()
 
 
+def test_help_uses_current_triggers_and_explains_list_and_export(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ui.messagebox, "showinfo", lambda *a, **k: calls.append((a, k)))
+    root = object()
+    ui.show_help(root, ui.Config(hotkey="Pause", mouse_trigger="Alt + middle-click"))
+    (title, text), options = calls[0]
+    assert title == "Gather — Help" and options["parent"] is root
+    for phrase in ("Pause", "alt + middle-click", "Alt+Z", "Drag", "×", "Documents\\Gather", "Ctrl+V", "replaces normal middle-click"):
+        assert phrase in text
+
+
+def test_chevron_is_a_scaled_vector_image():
+    down, up = ui._chevron_image(1.5, 0), ui._chevron_image(1.5, 1)
+    assert down.size == (24, 24) and down.mode == "RGBA"
+    assert down.tobytes() != up.tobytes() and down.getbbox() is not None
+
+
 def test_tray_menu(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     calls = []
-    keys = "toggle undo cancel copy_text copy_path open_folder quit autostart".split()
+    keys = "toggle undo cancel copy_text copy_path open_folder help quit autostart".split()
     actions = {k: (lambda k=k: calls.append(k)) for k in keys}
     actions["hotkey"] = lambda name: calls.append(("hotkey", name))
     actions["mouse_trigger"] = lambda name: calls.append(("mouse_trigger", name))
@@ -68,6 +85,9 @@ def test_tray_menu(tmp_path, monkeypatch):
     t.undo_ok, t.count = True, 2
     items[0](t.icon)
     assert calls == ["toggle"]
+    calls.clear()
+    next(i for i in items if i.text == "Help")(t.icon)
+    assert calls == ["help"]
     fmt = [i for i in items if i.text == "Format"][0]
     pdf = list(fmt.submenu.items)[2]
     pdf(t.icon)

@@ -30,9 +30,10 @@ taskbar if you want it always visible. You don't need it, though: a small red
 | | |
 |---|---|
 | Start / stop recording | **Middle-click** (default), **Alt+C**, or left-click the tray icon |
-| While recording | every text copy is collected; the pill counts items and briefly previews each copy |
+| While recording | every text copy is collected; the pill shows just the item count |
 | Remove a wrong copy | **Alt+Z**, or tray → **Remove last item (Alt+Z)**; repeat to remove earlier items |
-| See and arrange all copies | click **⌄** on the pill; drag a left handle to reorder, or click a row's **×** to remove it |
+| See and arrange all copies | click the pill's **arrow**; drag a left handle to reorder, or click a row's **×** to remove it |
+| Learn how to use Gather | right-click the tray icon → **Help** |
 | After stopping | the file is on your clipboard. Press **Ctrl+V** wherever you want it |
 | While saving | the pill shows a grey **Saving…** (large PDFs take a few seconds); you can start a new session meanwhile |
 
@@ -40,16 +41,20 @@ You always know the state: grey round tray icon = idle; red square icon, the pil
 at the top of the screen, and a short sound = recording. A notification names the file
 when you stop.
 
-The pill shows the first 40 characters of a copy for about two seconds, with line
-breaks shown as spaces and **…** when shortened. Undo shows **Removed: <preview>**;
-an empty session shows **Nothing to undo**. Previews always mask recognized secrets
-using the same masker as exports, even when export masking is switched off. The pill
-stays out of your way: it does not take focus and clicks pass through its body.
+The pill stays at **● Gather N**, without flashing copied text or undo previews.
+It does not take focus, and clicks pass through its body. Copied text is visible
+only in the expanded list, where previews always mask recognized secrets, even
+when export masking is switched off. An empty undo shows a notification.
 
-Click the pill's **⌄** button to see every collected item in a wider dark panel;
-**⌃** collapses it. Each row shows its position, a short masked preview, source app
+Click the pill's **down arrow** to see every collected item in a wider dark panel;
+the **up arrow** collapses it. Each row shows its position, a short masked preview, source app
 and window title, and capture time. Drag the **⋮⋮** handle on the left to move an
-item; a bright line marks where it will land. Click **×** on the right to remove it
+item; the whole row follows your mouse, neighbouring rows slide out of its way,
+and a bright line marks where it will land. Hold near the top or bottom of the
+list to scroll while dragging. Drop outside the list horizontally to cancel a
+move. Rows slide smoothly into place, and the arrow/panel ease open and closed
+(following Windows' animation setting). New copies do not interrupt your drag.
+Click **×** on the right to remove it
 immediately. There is no redo. The list updates as you copy and scrolls with the
 mouse wheel when there are more than eight items. Panel clicks and drags never
 take focus from the app you are copying from, and do not toggle recording.
@@ -111,6 +116,7 @@ Windows 11:
   (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `AIza…`, private-key blocks) with `[masked]`,
   in the copied text and in window titles
 - *Start with Windows*, *Quit*
+- *Help*: a short offline guide to recording, arranging copies and pasting the file
 
 **What goes in the file**
 

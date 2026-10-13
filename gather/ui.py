@@ -1,9 +1,12 @@
 """Tray, recording pill, sounds, config, autostart."""
 import ctypes
 import json
+import math
 import os
 import threading
 import tkinter as tk
+from tkinter import messagebox
+from time import monotonic
 import winreg
 import winsound
 from ctypes import wintypes
@@ -12,7 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 
 from .win32 import DEFAULT_HOTKEY, HOTKEYS, DEFAULT_MOUSE_TRIGGER, MOUSE_TRIGGERS
 from .session import mask_secrets
@@ -96,6 +99,22 @@ def play(kind: str) -> None:
         pass
 
 
+def show_help(root: tk.Tk, cfg: Config) -> None:
+    mouse = f" or {cfg.mouse_trigger.lower()}" if cfg.mouse_trigger != "Off" else ""
+    messagebox.showinfo("Gather — Help",
+        f"1. Start recording with {cfg.hotkey}{mouse}, or left-click the tray icon.\n\n"
+        "2. Copy text from any app. Gather counts your items.\n\n"
+        "3. Click the pill's arrow to see the list. Drag a left handle to reorder; "
+        "hold near the top or bottom to scroll. Click × to remove an item.\n\n"
+        "4. Alt+Z removes the latest remaining copy, even after reordering. No redo.\n\n"
+        f"5. Stop with {cfg.hotkey}{mouse}, or the tray icon. Your file is saved in "
+        "Documents\\Gather and put on the clipboard. Ctrl+V pastes or attaches it.\n\n"
+        "Right-click the tray for format, hotkey, mouse trigger and cancel options. "
+        "List previews always mask recognized secrets.\n\n"
+        "Middle-click mode replaces normal middle-click in other apps. "
+        "Choose Alt + middle-click or Off to keep that behaviour.", parent=root)
+
+
 def _icon_image(recording: bool) -> Image.Image:
     s = 4  # supersample
     im = Image.new("RGBA", (64 * s, 64 * s), (0, 0, 0, 0))
@@ -122,7 +141,7 @@ class Tray:
 
     def __init__(self, cfg: Config, actions: dict[str, Callable[[], None]]) -> None:
         """actions keys: 'toggle', 'undo', 'cancel', 'copy_text', 'copy_path',
-        'open_folder', 'quit', 'autostart', 'hotkey' and 'mouse_trigger'
+        'open_folder', 'help', 'quit', 'autostart', 'hotkey' and 'mouse_trigger'
         (take a preset name; the app saves it after applying). Left-click = 'toggle'.
         Format radio + mask checkbox edit cfg and cfg.save() directly."""
         self.cfg, self.actions = cfg, actions
@@ -140,7 +159,7 @@ class Tray:
         hint = " / ".join(triggers) or "tray click"
         if self.recording:
             undo = "Alt+Z undo" if self.undo_ok else "tray undo"
-            return f"Gather — recording · {self.count} item{'' if self.count == 1 else 's'} ({hint} to stop; {undo}; ⌄ items)"
+            return f"Gather — recording · {self.count} item{'' if self.count == 1 else 's'} ({hint} to stop; {undo}; arrow: items)"
         return f"Gather — idle ({hint} to start)"
 
     def _hotkey(self) -> str:
@@ -195,6 +214,7 @@ class Tray:
             I("Mask secrets", togglemask, checked=lambda i: self.cfg.mask),
             I("Start with Windows", self._act("autostart"), checked=lambda i: get_autostart()),
             M.SEPARATOR,
+            I("Help", self._act("help")),
             I("Quit", self._act("quit")),
         )
 
@@ -290,6 +310,23 @@ def _fit_text(label: tk.Label, text: str) -> None:
     label.config(text=shown)
 
 
+def _chevron_image(scale: float, fraction: float) -> Image.Image:
+    """A rounded vector path, supersampled so the small icon stays crisp."""
+    size, sample = round(16 * scale), 4
+    image = Image.new("RGBA", (size * sample, size * sample))
+    draw = ImageDraw.Draw(image)
+    angle = math.pi * fraction
+    points = [(8 + x * math.cos(angle) - y * math.sin(angle),
+               8 + x * math.sin(angle) + y * math.cos(angle)) for x, y in ((-4, -2), (0, 2), (4, -2))]
+    points = [(x * size / 16 * sample, y * size / 16 * sample) for x, y in points]
+    width = max(1, round(1.8 * scale * sample))
+    draw.line(points, fill="#dddddd", width=width, joint="curve")
+    radius = width / 2
+    for x, y in points:
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill="#dddddd")
+    return image.resize((size, size), Image.Resampling.LANCZOS)
+
+
 class Pill:
     """Click-through body, separate clickable chevron and item panel; all never activate.
     Only edit callbacks enqueue work; widgets and list updates live on the Tk thread."""
@@ -306,23 +343,31 @@ class Pill:
         self.lbl = tk.Label(w, text="", fg="white", bg=self.BG, font=("Segoe UI", 10))
         self.lbl.pack(side="left", padx=(4, 10), pady=4)
         w.withdraw()
-        self._pulse = None
-        self._preview_timer = None
-        self._count = 0
+        self.scale = float(root.tk.call("tk", "scaling")) * 72 / 96
+        motion = wintypes.BOOL(True)
+        _user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(motion), 0)
+        self._motion = bool(motion.value)
+        self._panel_timer = self._rows_timer = self._scroll_timer = None
+        self._panel_fraction = 0.0
+        self._panel_geometry = None
+        self._row_targets = {}
+        self._layout_targets = {}
         self.recording = self.expanded = False
         self.items, self.rows = [], {}
         self.on_remove, self.on_move = on_remove, on_move
         self._drag_id = None
         self._drop = 0
+        self._drag_pointer = (0, 0)
+        self._drag_offset = 0
         self.chevron_win, self.chevron_hwnd = _overlay(root, "Gather expand")
-        self.chevron = tk.Button(self.chevron_win, text="⌄", command=self.toggle_panel,
+        self._chevrons = [ImageTk.PhotoImage(_chevron_image(self.scale, i / 12), master=root) for i in range(13)]
+        self.chevron = tk.Button(self.chevron_win, text="Show items", image=self._chevrons[0], command=self.toggle_panel,
                                 fg="white", bg=self.BG, activebackground=self.FLASH,
                                 activeforeground="white", relief="flat", borderwidth=0,
                                 highlightthickness=0, takefocus=False, font=("Segoe UI", 12))
         self.chevron.pack(fill="both", expand=True)
         self.panel, self.panel_hwnd = _overlay(root, "Gather items")
         self.panel.attributes("-alpha", 1.0)
-        self.scale = float(root.tk.call("tk", "scaling")) * 72 / 96
         self.row_height = round(52 * self.scale)
         self.canvas = tk.Canvas(self.panel, bg=self.BG, highlightthickness=0,
                                 takefocus=False, yscrollincrement=self.row_height)
@@ -338,6 +383,38 @@ class Pill:
         # Canvas drawings sit behind embedded windows; a raised frame keeps the marker visible.
         self.marker = tk.Frame(self.canvas, bg="#ff6b61", height=2, takefocus=False)
         self.panel.bind("<MouseWheel>", self._wheel)
+        self.win.bind("<Destroy>", lambda e: self._cleanup() if e.widget == self.win else None)
+
+    def _cancel_timer(self, name: str) -> None:
+        timer = getattr(self, name)
+        if timer is not None:
+            self.root.after_cancel(timer)
+            setattr(self, name, None)
+
+    def _animate(self, name, frame, done=lambda: None) -> None:
+        self._cancel_timer(name)
+        started = monotonic()
+        def step():
+            t = min(1.0, (monotonic() - started) / 0.18) if self._motion else 1.0
+            frame(1 - (1 - t) ** 3)
+            if t < 1:
+                setattr(self, name, self.root.after(16, step))
+            else:
+                setattr(self, name, None)
+                done()
+        step()
+
+    def _reveal(self, fraction):
+        self._panel_fraction = fraction
+        self.chevron.config(image=self._chevrons[round(fraction * 12)])
+        if self._panel_geometry is not None:
+            width, height, x, y = self._panel_geometry
+            self.panel.geometry(f"{width}x{max(1, round(height * fraction))}+{x}+{y}")
+
+    def _cleanup(self):
+        self._cancel_drag()
+        self._cancel_timer("_panel_timer")
+        self._cancel_timer("_rows_timer")
 
     def set_items(self, items) -> None:
         self.items = list(items)
@@ -349,35 +426,46 @@ class Pill:
         if not self.recording:
             return
         if self.expanded:
-            self.collapse()
+            self.collapse(animated=True)
         else:
             self.expanded = True
-            self.chevron.config(text="⌃")
+            self.chevron.config(text="Hide items")
             self._render_items()
             self._place()
             self.panel.deiconify()
+            start = self._panel_fraction
+            self._animate("_panel_timer", lambda p: self._reveal(start + (1 - start) * p))
 
-    def collapse(self) -> None:
+    def collapse(self, animated: bool = False) -> None:
         self.expanded = False
-        self._drag_id = None
-        self.marker.place_forget()
-        self.panel.withdraw()
-        self.chevron.config(text="⌄")
+        self._cancel_drag()
+        self._cancel_timer("_rows_timer")
+        self.chevron.config(text="Show items")
+        if animated:
+            start = self._panel_fraction
+            self._animate("_panel_timer", lambda p: self._reveal(start * (1 - p)), self.panel.withdraw)
+        else:
+            self._cancel_timer("_panel_timer")
+            self._reveal(0)
+            self.panel.withdraw()
 
     def _render_items(self) -> None:
         ids = {c.id for c in self.items}
+        if self._drag_id not in ids:
+            self._cancel_drag(restore=False)
+        self._cancel_timer("_rows_timer")
+        self._layout_targets = {}
         for item_id in list(self.rows):
             if item_id not in ids:
                 self.rows.pop(item_id)["frame"].destroy()
-        if self._drag_id not in ids:
-            self._drag_id = None
-            self.marker.place_forget()
-        self.empty.pack_forget()
-        for row in self.rows.values():
-            row["frame"].pack_forget()
+        self.empty.place_forget()
+        targets = {}
         for i, chunk in enumerate(self.items, 1):
-            if chunk.id not in self.rows:
+            y = (i - 1) * self.row_height
+            new = chunk.id not in self.rows
+            if new:
                 self.rows[chunk.id] = self._row(chunk)
+                self.rows[chunk.id]["frame"].place(x=0, y=y, relwidth=1, height=self.row_height)
             row = self.rows[chunk.id]
             row["number"].config(text=str(i), width=max(3, len(str(len(self.items)))))
             row["short_preview"] = preview_text(chunk.text, 60)
@@ -387,18 +475,36 @@ class Pill:
             row["short_source"] = source
             _fit_text(row["source"], source)
             row["time"].config(text=chunk.ts.strftime("%H:%M:%S"))
-            row["frame"].pack(fill="x")
+            targets[chunk.id] = y
+        self._row_targets = targets
+        total = max(1, len(self.items)) * self.row_height
+        self.content.config(height=total)
         if not self.items:
-            self.empty.pack(fill="x", pady=14)
+            self.empty.place(x=0, y=0, relwidth=1, height=self.row_height)
         if len(self.items) > 8:
             self.scrollbar.pack(side="right", fill="y")
         else:
             self.scrollbar.pack_forget()
         self.content.update_idletasks()
-        self.canvas.configure(scrollregion=self.canvas.bbox(self.content_window))
+        self.canvas.configure(scrollregion=(0, 0, self.canvas.winfo_width(), total))
+        if self._drag_id is not None:
+            self._update_drop()
+        else:
+            self._slide_rows(targets)
+
+    def _slide_rows(self, targets):
+        if targets == self._layout_targets:
+            return
+        self._layout_targets = targets
+        starts = {key: self.rows[key]["frame"].winfo_y() for key in targets}
+        def position(p):
+            for key, y in targets.items():
+                self.rows[key]["frame"].place_configure(y=round(starts[key] + (y - starts[key]) * p))
+        self._animate("_rows_timer", position)
 
     def _row(self, chunk) -> dict:
-        row = tk.Frame(self.content, bg=self.BG, height=self.row_height)
+        row = tk.Frame(self.content, bg=self.BG, height=self.row_height,
+                       highlightthickness=1, highlightbackground=self.BG)
         row.pack_propagate(False)
         handle = tk.Label(row, text="⋮⋮", fg="#aaaaaa", bg=self.BG, cursor="fleur",
                           font=("Segoe UI", 12), takefocus=False)
@@ -437,41 +543,106 @@ class Pill:
     def _wheel(self, event):
         if self.expanded and event.delta:
             self.canvas.yview_scroll(-max(1, abs(event.delta) // 120) * (1 if event.delta > 0 else -1), "units")
+            if self._drag_id is not None:
+                self._update_drop()
         return "break"
 
     def _drag_start(self, event, item_id):
         if self.recording and self.expanded:
+            self._cancel_drag(restore=False)
+            self._cancel_timer("_rows_timer")
             self._drag_id = item_id
+            frame = self.rows[item_id]["frame"]
+            self._drag_offset = self.canvas.canvasy(event.y_root - self.canvas.winfo_rooty()) - frame.winfo_y()
+            frame.config(highlightbackground="#ff6b61")
+            frame.lift()
+            self.rows[item_id]["handle"].config(fg="#ff6b61")
+            self.rows[item_id]["handle"].grab_set()
             self._drag_motion(event)
         return "break"
 
     def _drag_motion(self, event):
         if self._drag_id is None:
             return "break"
-        y = event.y_root - self.canvas.winfo_rooty()
-        if y < 0 or y > self.canvas.winfo_height():
-            self.canvas.yview_scroll(-1 if y < 0 else 1, "units")
-        self._drop = max(0, min(len(self.items), int((self.canvas.canvasy(y) + self.row_height / 2) // self.row_height)))
-        line_y = self._drop * self.row_height - self.canvas.canvasy(0)
+        self._drag_pointer = event.x_root, event.y_root
+        direction = self._update_drop()
+        if direction and self._scroll_timer is None:
+            self._scroll_timer = self.root.after(80, self._drag_scroll)
+        elif not direction:
+            self._cancel_timer("_scroll_timer")
+        return "break"
+
+    def _update_drop(self):
+        x, y = self._drag_pointer
+        x -= self.canvas.winfo_rootx()
+        y -= self.canvas.winfo_rooty()
+        height = self.canvas.winfo_height()
+        top = self.canvas.canvasy(0)
+        frame = self.rows[self._drag_id]["frame"]
+        # Move the actual masked row with the pointer, keeping the whole row visible.
+        frame.place_configure(y=round(max(top, min(self.canvas.canvasy(y) - self._drag_offset,
+                                                  top + max(0, height - self.row_height)))))
+        frame.lift()
+        if not 0 <= x < self.canvas.winfo_width():
+            self._drop = None
+            self.marker.place_forget()
+            self._slide_rows({key: y for key, y in self._row_targets.items() if key != self._drag_id})
+            return 0
+        clipped = max(0, min(y, height - 1))
+        self._drop = max(0, min(len(self.items), int((self.canvas.canvasy(clipped) + self.row_height / 2) // self.row_height)))
+        order = [c.id for c in self.items]
+        origin = order.index(self._drag_id)
+        position = self._drop - (self._drop > origin)
+        order.pop(origin)
+        order.insert(position, self._drag_id)
+        self._slide_rows({key: i * self.row_height for i, key in enumerate(order) if key != self._drag_id})
+        line_y = position * self.row_height - top
         self.marker.place(x=0, y=max(0, min(line_y, self.canvas.winfo_height() - 2)), relwidth=1)
         self.marker.lift()
-        return "break"
+        edge = min(self.row_height // 2, height // 3)
+        lo, hi = self.canvas.yview()
+        return -1 if y < edge and lo > 0 else (1 if y > height - edge and hi < 1 else 0)
+
+    def _drag_scroll(self):
+        self._scroll_timer = None
+        if self._drag_id is None:
+            return
+        direction = self._update_drop()
+        if direction:
+            self.canvas.yview_scroll(direction, "units")
+            self._update_drop()
+            self._scroll_timer = self.root.after(80, self._drag_scroll)
+
+    def _cancel_drag(self, restore=True):
+        self._cancel_timer("_scroll_timer")
+        if self._drag_id in self.rows:
+            handle = self.rows[self._drag_id]["handle"]
+            if handle.grab_current() is handle:
+                handle.grab_release()
+            handle.config(fg="#aaaaaa")
+            self.rows[self._drag_id]["frame"].config(highlightbackground=self.BG)
+        self._drag_id = None
+        self.marker.place_forget()
+        if restore and self.recording and self.expanded:
+            self._slide_rows(self._row_targets)
 
     def _drag_end(self, event):
         if self._drag_id is not None and self.recording and self.expanded:
-            self._drag_motion(event)
+            self._drag_pointer = event.x_root, event.y_root
+            self._update_drop()  # no extra scroll on release: land exactly at the marker
             item_id = self._drag_id
             origin = next(i for i, c in enumerate(self.items) if c.id == item_id)
-            position = self._drop - (self._drop > origin)
-            self._drag_id = None
-            self.marker.place_forget()
-            if origin != position:
+            position = self._drop - (self._drop > origin) if self._drop is not None else None
+            self._cancel_drag(restore=False)
+            if position is not None and origin != position:
+                self._slide_rows({**self._layout_targets, item_id: position * self.row_height})
                 self.on_move(item_id, position)
+            else:
+                self._slide_rows(self._row_targets)
         return "break"
 
-    def _set(self, count: int, message: str = "") -> None:
-        self._count = count
-        self.lbl.config(text=f"Gather  {count}" + (f"  ·  {message}" if message else ""))
+    def _set(self, count: int) -> None:
+        self.lbl.config(text=f"Gather  {count}")
         self.dot.config(fg="#ff3b30")  # back to recording red after saving()
 
     def _place(self) -> None:
@@ -489,51 +660,25 @@ class Pill:
             panel_x = (r.left + r.right - width) // 2
             panel_y = y + height + 4
             panel_h = min(max(1, min(8, len(self.items))) * self.row_height, r.bottom - panel_y - 6)
-            self.panel.geometry(f"{width}x{max(1, panel_h)}+{panel_x}+{panel_y}")
+            self._panel_geometry = width, max(1, panel_h), panel_x, panel_y
+            self._reveal(self._panel_fraction)
 
     def show(self, count: int) -> None:
         self.recording = True
         self.collapse()
-        self._cancel_preview()
         self._set(count)
         self._place()
         self.win.deiconify()
         self.win.attributes("-topmost", True)
         self.chevron_win.deiconify()
 
-    def update(self, count: int, message: str = "") -> None:
-        """Set count and briefly pulse."""
-        self._cancel_preview()
-        self._set(count, message)
+    def update(self, count: int) -> None:
+        """Keep the pill to its count; copied text belongs in the expanded list."""
+        self._set(count)
         self._place()
-        self._paint(self.FLASH)
-        if self._pulse:
-            self.root.after_cancel(self._pulse)
-        self._pulse = self.root.after(150, self._unflash)
-        if message:
-            self._preview_timer = self.root.after(2000, self._expire_preview)
-
-    def _cancel_preview(self) -> None:
-        if self._preview_timer:
-            self.root.after_cancel(self._preview_timer)
-            self._preview_timer = None
-
-    def _expire_preview(self) -> None:
-        self._preview_timer = None
-        self._set(self._count)
-        self._place()
-
-    def _paint(self, bg: str) -> None:
-        for wd in (self.win, self.dot, self.lbl):
-            wd.config(bg=bg)
-
-    def _unflash(self) -> None:
-        self._pulse = None
-        self._paint(self.BG)
 
     def saving(self) -> None:
         """Show 'Saving…' (grey dot, distinct from recording) while an export runs."""
-        self._cancel_preview()
         self.recording = False
         self.collapse()
         self.chevron_win.withdraw()
@@ -544,7 +689,6 @@ class Pill:
         self.win.attributes("-topmost", True)
 
     def hide(self) -> None:
-        self._cancel_preview()
         self.recording = False
         self.collapse()
         self.chevron_win.withdraw()

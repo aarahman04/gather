@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from gather import win32
+from gather import win32, __version__
 from live_safety import foreground, restore_text
 
 
@@ -81,6 +81,18 @@ def wait_for(callback, timeout=15):
     raise AssertionError("Timed out waiting for EXE state")
 
 
+def copy_via_powershell(text):
+    for _ in range(10):
+        result = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                 "Set-Clipboard -Value '" + text.replace("'", "''") + "'"],
+                                capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            wait_for(lambda: win32._get_clipboard_text() == text, timeout=3)
+            return
+        time.sleep(0.1)  # another desktop process can briefly own the clipboard
+    raise RuntimeError("PowerShell Set-Clipboard failed: " + result.stderr)
+
+
 COMBO = (0x12, ord("C"))  # Alt+C; fresh APPDATA means default config
 assert win32.DEFAULT_HOTKEY == "Alt+C"
 
@@ -145,7 +157,7 @@ def screenshot(pid, name, expanded=False):
         image.paste(panel, (0, pill.height + 4))
     else:
         image = pill
-    path = ROOT / "handoff" / f"v0.2.4-{name}.png"
+    path = ROOT / "handoff" / f"v{__version__}-{name}.png"
     path.parent.mkdir(exist_ok=True)
     image.save(path)
     print(f"Screenshot: {path.name}")
@@ -159,7 +171,8 @@ def main():
     folder = (win32.documents_dir() / "Gather").resolve()
     before = set(folder.glob("gather-*.md"))
     marker = "codex-exe-" + uuid.uuid4().hex
-    copies = [marker + "-first", marker + "-second", marker + "-third"]
+    copies = [f"{label} — sample copied text\n{marker}-{name}"
+              for label, name in (("First item", "first"), ("Second item", "second"), ("Third item", "third"))]
     process = None
     owned_pids = set()
     verified_path = None
@@ -202,19 +215,16 @@ def main():
             time.sleep(0.3)
             assert not undo_key_free(), "EXE did not register recording-only Alt+Z"
             for text in copies:
-                subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-Clipboard -Value '{text}'"],
-                               check=True, timeout=30)
+                copy_via_powershell(text)
                 time.sleep(0.25)
             wrong = marker + "-undo-me"
-            subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-Clipboard -Value '{wrong}'"],
-                           check=True, timeout=30)
+            copy_via_powershell(wrong)
             time.sleep(0.3)
             hotkey((0x12, ord("Z")))
             time.sleep(0.3)
             assert win32._get_clipboard_text() == wrong, "Undo touched the clipboard"
             source = foreground()
             source_focus = win32.user32.GetFocus()
-            time.sleep(2.1)  # stable collapsed pill after the temporary undo preview
             screenshot(pid, "pill")
             button = rectangle(overlay("Gather expand", pid))
             click_point((button[0] + button[2]) // 2, (button[1] + button[3]) // 2, pump, pid)
@@ -226,9 +236,18 @@ def main():
             row_height = (rect[3] - rect[1]) // 3
             click_point(rect[2] - 20, rect[1] + row_height * 3 // 2, pump, pid)
             wait_for(lambda: rectangle(panel_hwnd)[3] - rectangle(panel_hwnd)[1] == row_height * 2)
+            time.sleep(0.25)  # the remaining row is sliding into its new slot
             rect = rectangle(panel_hwnd)
+            from PIL import ImageGrab
+            frames = []
+            def record_drag():
+                pump()
+                frames.append(ImageGrab.grab(rectangle(panel_hwnd)))
             drag_points((rect[0] + 15, rect[1] + row_height * 3 // 2),
-                        (rect[0] + 15, rect[1] + 2), pump, pid)
+                        (rect[0] + 15, rect[1] + 2), record_drag, pid, steps=8, hold=0.2)
+            animation = ROOT / "handoff" / f"v{__version__}-drag.gif"
+            frames[0].save(animation, save_all=True, append_images=frames[1:], duration=100, loop=0)
+            print(f"Animation: {animation.name}")
             time.sleep(0.2)
             assert win32.user32.GetForegroundWindow() == source and win32.user32.GetFocus() == source_focus
             assert win32._get_clipboard_text() == wrong, "Panel edits touched the clipboard"
@@ -251,24 +270,41 @@ def main():
             win32.copy_text_to_clipboard("")
             hotkey()
             time.sleep(0.3)
-            many = [f"{marker}-many-{i:02}" for i in range(1, 11)]
+            many = [f"Collected item {i:02} — sample text\n{marker}-many-{i:02}" for i in range(1, 11)]
             for i, copy in enumerate(many):
-                subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-Clipboard -Value '{copy}'"],
-                               check=True, timeout=30)
+                copy_via_powershell(copy)
                 time.sleep(0.15)
                 if i == 0:
                     button = rectangle(overlay("Gather expand", pid))
                     click_point((button[0] + button[2]) // 2, (button[1] + button[3]) // 2, pump, pid)
             screenshot(pid, "panel-10", True)
+            # Wheel to the bottom, then move the tenth row to the top while holding
+            # the edge. The EXE must retain capture and continuously scroll upward.
+            rect = rectangle(panel_hwnd)
+            x = rect[0] + 15
+            y = rect[1] + row_height * 4
+            assert foreground() == source
+            assert win32.user32.SetCursorPos(x, y)
+            assert win32._window_pid(win32.user32.WindowFromPoint(w.POINT(x, y))) == pid
+            wheel = INPUT(type=0, mi=MOUSEINPUT(mouseData=(-240) & 0xFFFFFFFF, dwFlags=0x0800))
+            assert win32.user32.SendInput(1, ctypes.byref(wheel), ctypes.sizeof(INPUT)) == 1
+            pump()
+            drag_points((x, rect[1] + row_height * 15 // 2), (x, rect[1] + 2),
+                        pump, pid, steps=8, hold=0.3)
+            time.sleep(0.2)
+            assert win32.user32.GetForegroundWindow() == source and win32.user32.GetFocus() == source_focus
+            assert win32._get_clipboard_text() == many[-1], "Reorder touched the clipboard"
             send(middle(), middle(True))
             pump()
             other = wait_for(clipboard_files)
             assert len(other) == 1 and other[0] != path
             body = other[0].read_text(encoding="utf-8")
             assert "10 items" in body.splitlines()[0] and all(copy in body for copy in many)
-            assert [body.index(copy) for copy in many] == sorted(body.index(copy) for copy in many)
+            ordered = [many[-1], *many[:-1]]
+            assert [body.index(copy) for copy in ordered] == sorted(body.index(copy) for copy in ordered)
             assert events == []
-            print("PASS: Alt+C start, ten live panel rows, middle-click stop with panel open; consumed down/up")
+            print("PASS: Alt+C start, ten live rows, wheel and continuous edge-scroll reorder, "
+                  "middle-click stop; exported tenth/first-through-ninth order")
         finally:
             try:
                 for pid in sorted(owned_pids, key=lambda pid: pid != process.pid):

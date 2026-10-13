@@ -1,4 +1,5 @@
 import queue
+import gc
 import threading
 import time
 import tkinter as tk
@@ -39,8 +40,7 @@ def fake_app(tmp_path, monkeypatch, recording=True):
     app.pill = SimpleNamespace(hide=lambda: setattr(app, "pill_state", "hidden"),
                                set_items=lambda items: setattr(app, "panel_items", list(items)),
                                show=lambda n: setattr(app, "pill_state", f"recording {n}"),
-                               update=lambda n, message="": (setattr(app, "pill_state", f"recording {n}"),
-                                                             setattr(app, "preview", message)),
+                               update=lambda n: setattr(app, "pill_state", f"recording {n}"),
                                saving=lambda: setattr(app, "pill_state", "saving"))
     app.root = SimpleNamespace(destroy=lambda: setattr(app, "destroyed", True),
                                after=lambda *args: None)
@@ -258,6 +258,8 @@ def test_pill_saving():
         p.hide()
     finally:
         root.destroy()
+        del p
+        gc.collect()  # ImageTk objects must be released on their Tk owner thread
 
 
 def test_hotkey_change_success_saves_cfg(tmp_path, monkeypatch):
