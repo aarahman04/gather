@@ -45,7 +45,8 @@ class App:
         self.watcher = win32.ClipboardWatcher(
             on_hotkey=lambda: self.q.put(("toggle",)),
             on_text=lambda text, app, title: self.q.put(("clip", text, app, title, datetime.now())),
-            hotkey=self.cfg.hotkey, mouse_trigger=self.cfg.mouse_trigger)
+            hotkey=self.cfg.hotkey, mouse_trigger=self.cfg.mouse_trigger,
+            on_undo=lambda: self.q.put(("undo",)))
 
     def run(self) -> None:
         self.tray.run_detached()
@@ -85,7 +86,7 @@ class App:
         if self.session is None:
             self.session = Session()
             self.journal = self.new_journal(self.session)
-            self.watcher.set_capturing(True)
+            self.start_capturing()
             self.tray.set_recording(True, 0)
             self.pill.show(0)
             ui.play("start")
@@ -95,12 +96,22 @@ class App:
     def on_clip(self, text, app, title, ts) -> None:
         if self.session is not None and self.session.add(text, app, title, ts):
             self.jot("append", self.session.chunks[-1])
-            self.refresh()
+            self.refresh(ui.preview_text(self.session.chunks[-1].text))
 
     def on_undo(self) -> None:
-        if self.session is not None and self.session.undo() is not None:
-            self.jot("undo")
-            self.refresh()
+        if self.session is None:
+            return
+        if not self.session.chunks:
+            return self.refresh("Nothing to undo")
+        # Persist first: a crash immediately after popping must not resurrect this item.
+        if self.journal is not None:
+            try:
+                self.journal.undo()
+            except OSError as e:
+                self.journal_error(e)
+                return self.tray.notify("Gather", "Couldn't save the undo record. Item kept; try again.")
+        removed = self.session.undo()
+        self.refresh(f"Removed: {ui.preview_text(removed.text)}")
 
     def on_cancel(self) -> None:
         if self.session is not None:
@@ -206,7 +217,7 @@ class App:
             if self.session is None and not recovery and not self.quitting:
                 # F1: resume the same session; its journal already holds the chunks
                 self.session, self.journal = session, journal or self.new_journal(session)
-                self.watcher.set_capturing(True)
+                self.start_capturing()
                 self.tray.set_recording(True, len(session))
                 self.pill.show(len(session))
                 retry = (f"press {self.watcher.hotkey} or click the tray icon"
@@ -229,10 +240,16 @@ class App:
             else:
                 self.drop(journal)
 
-    def refresh(self) -> None:
+    def start_capturing(self) -> None:
+        self.tray.undo_ok = self.watcher.set_capturing(True)
+        if not self.tray.undo_ok:
+            self.tray.notify("Gather", "Couldn't register Alt+Z (in use or Gather is busy). "
+                                      "Use tray → Remove last item to undo.")
+
+    def refresh(self, message: str = "") -> None:
         n = len(self.session)
         self.tray.set_recording(True, n)
-        self.pill.update(n)
+        self.pill.update(n, message)
 
     def show_pill(self) -> None:
         if self.session is None:  # a recording's pill wins over "Saving…"

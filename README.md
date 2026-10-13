@@ -30,13 +30,27 @@ taskbar if you want it always visible. You don't need it, though: a small red
 | | |
 |---|---|
 | Start / stop recording | **Middle-click** (default), **Alt+C**, or left-click the tray icon |
-| While recording | every text copy is collected; the pill counts items |
+| While recording | every text copy is collected; the pill counts items and briefly previews each copy |
+| Remove a wrong copy | **Alt+Z**, or tray → **Remove last item (Alt+Z)**; repeat to remove earlier items |
 | After stopping | the file is on your clipboard. Press **Ctrl+V** wherever you want it |
 | While saving | the pill shows a grey **Saving…** (large PDFs take a few seconds); you can start a new session meanwhile |
 
 You always know the state: grey round tray icon = idle; red square icon, the pill
 at the top of the screen, and a short sound = recording. A notification names the file
 when you stop.
+
+The pill shows the first 40 characters of a copy for about two seconds, with line
+breaks shown as spaces and **…** when shortened. Undo shows **Removed: <preview>**;
+an empty session shows **Nothing to undo**. Previews always mask recognized secrets
+using the same masker as exports, even when export masking is switched off. The pill
+stays out of your way: it does not take focus and clicks pass through it.
+
+**Alt+Z belongs to Gather only while recording.** It removes the most recent item
+without changing your clipboard; there is no redo. If another app owns Alt+Z, Gather
+notifies you and the tray action still works. Undo is recorded in the crash journal,
+so recovery does not restore removed items. Copying a removed item again collects it
+again, and undo also works if a failed save resumes recording. If the undo record
+cannot be written, Gather keeps the item and tells you to retry.
 
 **The default replaces normal middle-click in every app:** opening links in new tabs,
 closing tabs and autoscroll will stop working while Gather is running. This is intentional.
@@ -72,7 +86,7 @@ Windows 11:
 
 **Tray menu**
 
-- *Remove last item* / *Cancel session* (while recording)
+- *Remove last item (Alt+Z)* / *Cancel session* (while recording)
 - *Copy last as text*: the last session as plain Markdown text
 - *Copy last file path*
 - *Open Gather folder*: every session is saved in `Documents\Gather`, which doubles as your history

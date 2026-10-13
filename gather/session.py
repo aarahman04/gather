@@ -76,6 +76,8 @@ class Journal:
     def _write(self, rec: dict, mode: str = "a") -> None:
         # surrogatepass: clipboard text can hold lone surrogates; keep it byte-exact
         line = json.dumps(rec, ensure_ascii=False) + "\n"
+        if mode == "a":
+            line = "\n" + line  # isolate a new event from a previous partially failed write
         with open(self.path, mode, encoding="utf-8", errors="surrogatepass") as f:
             f.write(line)  # closing flushes to the OS, which survives a process kill
 

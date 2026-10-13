@@ -64,7 +64,7 @@ def gather_processes():
     result = subprocess.run(["powershell", "-NoProfile", "-Command", r"""
 @(Get-CimInstance Win32_Process | Where-Object {
     $_.Name -eq 'Gather.exe' -or
-    ($_.Name -eq 'pythonw.exe' -and $_.CommandLine -match '(?:^|\s)-m\s+gather(?:\s|$)')
+    ($_.Name -in @('python.exe','pythonw.exe') -and $_.CommandLine -match '(?:^|\s)-m\s+gather(?:\s|$)')
 } | Select-Object ProcessId,Name) | ConvertTo-Json -Compress
 """], capture_output=True, text=True, check=True, timeout=30)
     data = json.loads(result.stdout or "[]")
@@ -85,19 +85,19 @@ COMBO = (0x12, ord("C"))  # Alt+C; fresh APPDATA means default config
 assert win32.DEFAULT_HOTKEY == "Alt+C"
 
 
-def hotkey():
+def hotkey(combo=COMBO):
     hwnd = foreground()
-    assert not any(win32.user32.GetAsyncKeyState(vk) & 0x8000 for vk in COMBO), "Keys already held"
-    keys = [(vk, 0) for vk in COMBO] + [(vk, 2) for vk in reversed(COMBO)]
+    assert not any(win32.user32.GetAsyncKeyState(vk) & 0x8000 for vk in combo), "Keys already held"
+    keys = [(vk, 0) for vk in combo] + [(vk, 2) for vk in reversed(combo)]
     inputs = (INPUT * len(keys))(*(INPUT(type=1, ki=KEYBDINPUT(wVk=vk, dwFlags=flags))
                                   for vk, flags in keys))
     assert win32.user32.GetForegroundWindow() == hwnd, "Focus changed before SendInput"
     sent = win32.user32.SendInput(len(inputs), inputs, ctypes.sizeof(INPUT))
     if sent != len(inputs):
         # Release just our modifiers even if Windows accepted only part of the batch.
-        releases = (INPUT * len(COMBO))(*(INPUT(type=1, ki=KEYBDINPUT(wVk=vk, dwFlags=2))
-                                          for vk in reversed(COMBO)))
-        win32.user32.SendInput(len(COMBO), releases, ctypes.sizeof(INPUT))
+        releases = (INPUT * len(combo))(*(INPUT(type=1, ki=KEYBDINPUT(wVk=vk, dwFlags=2))
+                                          for vk in reversed(combo)))
+        win32.user32.SendInput(len(combo), releases, ctypes.sizeof(INPUT))
         raise ctypes.WinError(ctypes.get_last_error())
 
 
@@ -156,13 +156,28 @@ def main():
             if not taken:
                 win32.user32.UnregisterHotKey(None, 9281)
             assert taken, "EXE has not registered its hotkey"
+            def undo_key_free():
+                free = win32.user32.RegisterHotKey(None, 9282, win32.MOD_ALT, ord("Z"))
+                if free:
+                    win32.user32.UnregisterHotKey(None, 9282)
+                return bool(free)
+
+            assert undo_key_free(), "Alt+Z is not free while EXE is idle"
             send(middle(), middle(True))
             pump()
             time.sleep(0.3)
+            assert not undo_key_free(), "EXE did not register recording-only Alt+Z"
             for text in copies:
                 subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-Clipboard -Value '{text}'"],
                                check=True, timeout=30)
                 time.sleep(0.25)
+            wrong = marker + "-undo-me"
+            subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-Clipboard -Value '{wrong}'"],
+                           check=True, timeout=30)
+            time.sleep(0.3)
+            hotkey((0x12, ord("Z")))
+            time.sleep(0.3)
+            assert win32._get_clipboard_text() == wrong, "Undo touched the clipboard"
             hotkey()
             paths = wait_for(clipboard_files)
             assert len(paths) == 1
@@ -172,9 +187,10 @@ def main():
             assert "2 items" in text.splitlines()[0]
             assert all(text.count(copy) == 1 for copy in copies)
             assert text.index(copies[0]) < text.index(copies[1])
+            assert wrong not in text and undo_key_free()
             verified_path = path
             assert events == [], "EXE did not consume the middle click"
-            print(f"PASS: middle-click start, Alt+C stop, two ordered copies, CF_HDROP={path.name}")
+            print(f"PASS: middle-click start, Alt+Z undo, Alt+C stop, two ordered copies, CF_HDROP={path.name}")
             # The reverse pairing proves both triggers remain available for start and stop.
             win32.copy_text_to_clipboard("")
             hotkey()

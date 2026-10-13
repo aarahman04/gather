@@ -31,6 +31,7 @@ WM_APP = 0x8000
 WM_SET_HOTKEY = WM_APP + 1  # private: swap the hotkey on the watcher thread
 WM_SET_MOUSE_TRIGGER = WM_APP + 2
 WM_MOUSE_TRIGGER = WM_APP + 3
+WM_SET_CAPTURING = WM_APP + 4
 WH_MOUSE_LL = 14
 WM_MBUTTONDOWN, WM_MBUTTONUP = 0x207, 0x208
 WM_TIMER, CLIPBOARD_RETRY_TIMER = 0x113, 1
@@ -41,6 +42,7 @@ GMEM_MOVEABLE = 0x0002
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ERROR_ALREADY_EXISTS = 183
 HOTKEY_ID = 1
+UNDO_HOTKEY_ID = 3  # toggle presets alternate between IDs 1 and 2
 
 # Tray presets, name -> (modifiers, virtual key). MOD_NOREPEAT is added on registration.
 HOTKEYS: dict[str, tuple[int, int]] = {
@@ -243,6 +245,10 @@ def _wndproc(hwnd, msg, wparam, lparam):
     try:
         wt = _watchers.get(hwnd)
         if wt is not None:
+            if (msg == WM_HOTKEY and wparam == UNDO_HOTKEY_ID and wt._capturing
+                    and wt.undo_hotkey_ok and (lparam >> 16) & 0xFFFF == ord("Z")):
+                wt._on_undo()
+                return 0
             # Old queued hotkeys can survive a swap, including reuse of their ID.
             if (msg == WM_HOTKEY and wparam == wt._hotkey_id and wt.hotkey is not None
                     and (lparam >> 16) & 0xFFFF == HOTKEYS[wt.hotkey][1]):
@@ -262,6 +268,9 @@ def _wndproc(hwnd, msg, wparam, lparam):
             if msg == WM_SET_MOUSE_TRIGGER:
                 wt._swap_mouse_trigger()
                 return 0
+            if msg == WM_SET_CAPTURING:
+                wt._set_undo_hotkey()
+                return 0
             if msg == WM_MOUSE_TRIGGER:
                 if wparam:
                     # An unassigned key masks Alt's menu activation without a real shortcut.
@@ -274,6 +283,8 @@ def _wndproc(hwnd, msg, wparam, lparam):
                     wt._unhook_mouse()
                 finally:
                     user32.UnregisterHotKey(hwnd, wt._hotkey_id)
+                    user32.UnregisterHotKey(hwnd, UNDO_HOTKEY_ID)
+                    wt.undo_hotkey_ok = False
                     user32.RemoveClipboardFormatListener(hwnd)
                     user32.PostQuitMessage(0)
                 return 0
@@ -310,7 +321,8 @@ class ClipboardWatcher:
     def __init__(self, on_hotkey: Callable[[], None],
                  on_text: Callable[[str, str, str], None],
                  hotkey: str = DEFAULT_HOTKEY,
-                 mouse_trigger: str = DEFAULT_MOUSE_TRIGGER) -> None:
+                 mouse_trigger: str = DEFAULT_MOUSE_TRIGGER,
+                 on_undo: Callable[[], None] | None = None) -> None:
         """on_text(text, app, title): app = foreground process exe name
         (e.g. 'chrome.exe'), title = foreground window title at copy time.
         hotkey: a HOTKEYS name, registered by start()."""
@@ -331,6 +343,9 @@ class ClipboardWatcher:
         self._lock = threading.Lock()
         self._req_lock = threading.Lock()
         self._on_hotkey = on_hotkey
+        self._on_undo = on_undo
+        self.undo_hotkey_ok = False
+        self._capture_done = threading.Event()
         self._on_text = on_text
         self._capturing = False
         self._clipboard_retries = 0
@@ -391,9 +406,29 @@ class ClipboardWatcher:
             result.append(ok)
             done.set()
 
-    def set_capturing(self, on: bool) -> None:
-        """When False, clipboard updates are ignored (clipboard not read)."""
-        self._capturing = bool(on)
+    def set_capturing(self, on: bool) -> bool:
+        """Enable capture and its recording-only undo key. Return whether Alt+Z is available."""
+        with self._lock:
+            self._capturing = bool(on)
+            if self._on_undo is None:
+                return True
+            self._capture_done.clear()
+            if not self._hwnd or not user32.PostMessageW(self._hwnd, WM_SET_CAPTURING, 0, 0):
+                return False
+            self._capture_done.wait(2)
+            return self._capture_done.is_set() and (not on or self.undo_hotkey_ok)
+
+    def _set_undo_hotkey(self) -> None:
+        # Read current intent: even a delayed start message must not register while idle.
+        try:
+            if self._capturing and not self.undo_hotkey_ok:
+                self.undo_hotkey_ok = bool(user32.RegisterHotKey(
+                    self._hwnd, UNDO_HOTKEY_ID, MOD_ALT | MOD_NOREPEAT, ord("Z")))
+            elif not self._capturing and self.undo_hotkey_ok:
+                user32.UnregisterHotKey(self._hwnd, UNDO_HOTKEY_ID)
+                self.undo_hotkey_ok = False
+        finally:
+            self._capture_done.set()
 
     def set_mouse_trigger(self, name: str) -> bool:
         if name not in MOUSE_TRIGGERS:
@@ -513,6 +548,7 @@ class ClipboardWatcher:
                 _watchers.pop(hwnd, None)
                 self._hwnd = None
                 self.hotkey = None
+                self.undo_hotkey_ok = False
                 self._mouse_swallowed = False
 
     def _handle_update(self) -> None:

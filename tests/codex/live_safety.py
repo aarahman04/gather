@@ -40,6 +40,10 @@ def restore_text(saved):
 
 def pytest_sessionstart(session):
     global _saved, _saved_ok
+    # Fail before any input/clipboard changes when the user's utility is running.
+    from exe_check import gather_processes
+    if gather_processes():
+        raise RuntimeError("Quit the existing Gather instance before live tests")
     _saved = win32._get_clipboard_text()
     _saved_ok = True
     original = win32.user32.keybd_event

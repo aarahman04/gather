@@ -15,6 +15,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 from .win32 import DEFAULT_HOTKEY, HOTKEYS, DEFAULT_MOUSE_TRIGGER, MOUSE_TRIGGERS
+from .session import mask_secrets
 
 _FORMATS = ("md", "docx", "pdf")
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -127,6 +128,7 @@ class Tray:
         self.cfg, self.actions = cfg, actions
         self.recording, self.count = False, 0
         self.hotkey_ok = True  # False while no hotkey is registered
+        self.undo_ok = True
         self._img = {False: _icon_image(False), True: _icon_image(True)}
         self.menu = self._build_menu()
         self.icon = pystray.Icon("Gather", self._img[False], self._title(), self.menu)
@@ -137,7 +139,8 @@ class Tray:
             triggers.append(self.cfg.mouse_trigger)
         hint = " / ".join(triggers) or "tray click"
         if self.recording:
-            return f"Gather — recording · {self.count} item{'' if self.count == 1 else 's'} ({hint} to stop)"
+            undo = "Alt+Z undo" if self.undo_ok else "tray undo"
+            return f"Gather — recording · {self.count} item{'' if self.count == 1 else 's'} ({hint} to stop; {undo})"
         return f"Gather — idle ({hint} to start)"
 
     def _hotkey(self) -> str:
@@ -168,7 +171,8 @@ class Tray:
         return M(
             I(lambda i: ("Stop" if self.recording else "Start") + f" recording ({self._hotkey()})",
               self._act("toggle"), default=True),
-            I("Remove last item", self._act("undo"), enabled=lambda i: self.recording and self.count > 0),
+            I(lambda i: "Remove last item (Alt+Z)" if self.undo_ok else "Remove last item (Alt+Z unavailable)",
+              self._act("undo"), enabled=lambda i: self.recording),
             I("Cancel session", self._act("cancel"), enabled=lambda i: self.recording),
             M.SEPARATOR,
             I("Copy last as text", self._act("copy_text")),
@@ -225,6 +229,13 @@ _user32.GetParent.restype = wintypes.HWND
 _user32.GetParent.argtypes = [wintypes.HWND]
 
 
+def preview_text(text: str) -> str:
+    """Always mask before shortening; previews never expose recognized secrets."""
+    text = " ".join(mask_secrets(text).splitlines())
+    head = "".join(c if c.isprintable() else " " for c in text[:40])
+    return head + ("…" if len(text) > 40 else "")
+
+
 class Pill:
     """Small always-on-top, no-focus, click-through overlay at top-center (top-right would cover window buttons):
     '● Gather 4'. Lives on the Tk main thread."""
@@ -251,9 +262,12 @@ class Pill:
         self.lbl.pack(side="left", padx=(4, 10), pady=4)
         w.withdraw()
         self._pulse = None
+        self._preview_timer = None
+        self._count = 0
 
-    def _set(self, count: int) -> None:
-        self.lbl.config(text=f"Gather  {count}")
+    def _set(self, count: int, message: str = "") -> None:
+        self._count = count
+        self.lbl.config(text=f"Gather  {count}" + (f"  ·  {message}" if message else ""))
         self.dot.config(fg="#ff3b30")  # back to recording red after saving()
 
     def _place(self) -> None:
@@ -263,19 +277,33 @@ class Pill:
         self.win.geometry(f"+{(r.left + r.right - self.win.winfo_reqwidth()) // 2}+{r.top + 6}")
 
     def show(self, count: int) -> None:
+        self._cancel_preview()
         self._set(count)
         self._place()
         self.win.deiconify()
         self.win.attributes("-topmost", True)
 
-    def update(self, count: int) -> None:
+    def update(self, count: int, message: str = "") -> None:
         """Set count and briefly pulse."""
-        self._set(count)
+        self._cancel_preview()
+        self._set(count, message)
         self._place()
         self._paint(self.FLASH)
         if self._pulse:
             self.root.after_cancel(self._pulse)
         self._pulse = self.root.after(150, self._unflash)
+        if message:
+            self._preview_timer = self.root.after(2000, self._expire_preview)
+
+    def _cancel_preview(self) -> None:
+        if self._preview_timer:
+            self.root.after_cancel(self._preview_timer)
+            self._preview_timer = None
+
+    def _expire_preview(self) -> None:
+        self._preview_timer = None
+        self._set(self._count)
+        self._place()
 
     def _paint(self, bg: str) -> None:
         for wd in (self.win, self.dot, self.lbl):
@@ -287,6 +315,7 @@ class Pill:
 
     def saving(self) -> None:
         """Show 'Saving…' (grey dot, distinct from recording) while an export runs."""
+        self._cancel_preview()
         self.lbl.config(text="Saving…")
         self.dot.config(fg="#9a9a9a")
         self._place()
@@ -294,4 +323,5 @@ class Pill:
         self.win.attributes("-topmost", True)
 
     def hide(self) -> None:
+        self._cancel_preview()
         self.win.withdraw()

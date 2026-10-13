@@ -55,10 +55,17 @@ def test_tray_menu(tmp_path, monkeypatch):
     assert t._title() == "Gather — idle (Alt+C / Middle-click to start)"
     assert items[0].default
     undo, cancel = items[1], items[2]
+    assert undo.text == "Remove last item (Alt+Z)"
     assert not undo.enabled and not cancel.enabled
     t.recording, t.count = True, 2
     assert items[0].text == "Stop recording (Alt+C)"
     assert undo.enabled and cancel.enabled
+    assert "Alt+Z undo" in t._title()
+    t.count = 0
+    assert undo.enabled  # allow the visible "Nothing to undo" response
+    t.undo_ok = False
+    assert undo.text == "Remove last item (Alt+Z unavailable)" and "tray undo" in t._title()
+    t.undo_ok, t.count = True, 2
     items[0](t.icon)
     assert calls == ["toggle"]
     fmt = [i for i in items if i.text == "Format"][0]

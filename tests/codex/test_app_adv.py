@@ -31,14 +31,15 @@ def fake_app(tmp_path, monkeypatch, recording=True):
     app.notifications, app.clipboard = [], []
     app.capturing = app.destroyed = app.watcher_stopped = False
     app.pill_state = "hidden"
-    app.watcher = SimpleNamespace(set_capturing=lambda on: setattr(app, "capturing", on),
+    app.watcher = SimpleNamespace(set_capturing=lambda on: setattr(app, "capturing", on) or True,
                                   stop=lambda: setattr(app, "watcher_stopped", True),
                                   hotkey="Alt+C", mouse_trigger="Middle-click")
     app.tray = SimpleNamespace(set_recording=lambda *args: None, stop=lambda: None, hotkey_ok=True,
                                notify=lambda *args: app.notifications.append(args[1]))
     app.pill = SimpleNamespace(hide=lambda: setattr(app, "pill_state", "hidden"),
                                show=lambda n: setattr(app, "pill_state", f"recording {n}"),
-                               update=lambda n: setattr(app, "pill_state", f"recording {n}"),
+                               update=lambda n, message="": (setattr(app, "pill_state", f"recording {n}"),
+                                                             setattr(app, "preview", message)),
                                saving=lambda: setattr(app, "pill_state", "saving"))
     app.root = SimpleNamespace(destroy=lambda: setattr(app, "destroyed", True),
                                after=lambda *args: None)
